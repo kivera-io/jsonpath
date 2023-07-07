@@ -87,7 +87,7 @@ func getNestedValues(object interface{}, path []string) (interface{}, error) {
 	switch obj := object.(type) {
 	case map[string]interface{}:
 		if isIndex {
-			return nil, fmt.Errorf("map type cannot be set with index (%s)", key)
+			return nil, fmt.Errorf("map type cannot be accessed with index (%s)", key)
 		}
 		if _, ok := obj[key]; !ok {
 			return nil, fmt.Errorf("key does not exist (%s)", key)
@@ -96,7 +96,7 @@ func getNestedValues(object interface{}, path []string) (interface{}, error) {
 
 	case []interface{}:
 		if !isIndex {
-			return nil, fmt.Errorf("slice type cannot be set with key (%s)", key)
+			return nil, fmt.Errorf("slice type cannot be accessed with key (%s)", key)
 		}
 		if idx >= len(obj) {
 			return nil, fmt.Errorf("index out of range (%s)", key)
