@@ -11,7 +11,7 @@ import (
 var indexRegex = regexp.MustCompile(`\[[^]]+\]`)
 var invalidPathRegex = regexp.MustCompile(`\[\[|\]\]|\[\]|\][^\[]|\[[^]]+$`)
 
-func SetJsonPath(object interface{}, path string, value interface{}) error {
+func Set(object interface{}, path string, value interface{}) error {
 	pathParts, err := tokenizePath(path)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 	}
 }
 
-func GetJsonPath(object interface{}, path string) (interface{}, error) {
+func Get(object interface{}, path string) (interface{}, error) {
 	pathParts, err := tokenizePath(path)
 	if err != nil {
 		return nil, err
