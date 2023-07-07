@@ -9,7 +9,7 @@ import (
 )
 
 var indexRegex = regexp.MustCompile(`\[[^]]+\]`)
-var invalidPathRegex = regexp.MustCompile(`\[\[|\]\]|\[\]|\][^\[]|\[[^]]+$`)
+var invalidPathRegex = regexp.MustCompile(`^\]|\[\[|\]\]|\[\]|\][^\[]|\[[^]]*$`)
 
 func Set(object interface{}, path string, value interface{}) error {
 	pathParts, err := tokenizePath(path)
