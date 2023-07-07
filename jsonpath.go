@@ -1,4 +1,4 @@
-package jsonpth
+package jsonpath
 
 import (
 	"errors"
