@@ -6,20 +6,20 @@ Get and set values in an unmarshalled json using json path format.
 
 First, unmarshal your json string into an interface.
 
-`
+```
 var data interface{}
 
 err := json.Unmarshal([]byte(example), &data)
 if err != nil {
     panic(err)
 }
-`
+```
 
 ## Set Values
 
 Set values in your data using the following.
 
-`
+```
 // set a path
 err = SetJsonPath(data, "test.path", "value")
 if err != nil {
@@ -43,13 +43,13 @@ err = SetJsonPath(data, "test.object", map[string]interface{}{"test":123})
 if err != nil {
     fmt.Println(err)
 }
-`
+```
 
 ## Get Values
 
 Retrieve values in your data using the following.
 
-`
+```
 // get a value at a path
 val, err := GetJsonPath(data, "test.path")
 if err != nil {
@@ -63,4 +63,4 @@ if err != nil {
     panic(err)
 }
 fmt.Println(val)
-`
+```
