@@ -44,12 +44,20 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 		if !isIndex {
 			return nil, fmt.Errorf("slice type cannot be set with key (%s)", key)
 		}
+		idx, err = wrapIndex(idx, len(obj))
+		if err != nil {
+			return nil, err
+		}
 		obj = fillSlice(obj, idx)
 		obj[idx], err = setNestedValues(obj[idx], path[1:], value)
 		return obj, err
 
 	default:
 		if isIndex {
+			idx, err = wrapIndex(idx, 0)
+			if err != nil {
+				return nil, err
+			}
 			new := fillSlice([]interface{}{}, idx)
 			new[idx], err = setNestedValues(nil, path[1:], value)
 			return new, err
@@ -100,6 +108,10 @@ func getNestedValues(object interface{}, path []string) (interface{}, error) {
 		}
 		if idx >= len(obj) {
 			return nil, fmt.Errorf("index out of range (%s)", key)
+		}
+		idx, err := wrapIndex(idx, len(obj))
+		if err != nil {
+			return nil, err
 		}
 		return getNestedValues(obj[idx], path[1:])
 
@@ -171,4 +183,15 @@ func fillSlice(slice []interface{}, max int) []interface{} {
 		slice = append(slice, nil)
 	}
 	return slice
+}
+
+func wrapIndex(idx, length int) (int, error) {
+	if idx < 0 {
+		idxWrapped := length + idx
+		if idxWrapped < 0 {
+			return idx, fmt.Errorf("index out of range (%d)", idx)
+		}
+		idx = idxWrapped
+	}
+	return idx, nil
 }
