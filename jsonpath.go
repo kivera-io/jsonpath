@@ -9,8 +9,6 @@ import (
 	"unicode"
 )
 
-var indexRegex = regexp.MustCompile(`\[[^]]+\]`)
-var invalidPathRegex = regexp.MustCompile(`^\]|\[\[|\]\]|\[\]|\][^\[]|\[[^]]*$`)
 var rangeRegex = regexp.MustCompile(`^(-?\d+)?:(-?\d+)?$`)
 
 type Error struct {
@@ -19,13 +17,22 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.Msg
+	return fmt.Sprintf("%s: %s", e.Code, e.Msg)
 }
 
 const (
 	NotFound    = "not_found"
 	InvalidPath = "invalid_path"
 )
+
+type segment struct {
+	raw        string
+	keys       []string
+	indexes    []index
+	isKey      bool
+	isIndex    bool
+	isWildcard bool
+}
 
 type index struct {
 	idx      int
@@ -36,7 +43,7 @@ type index struct {
 }
 
 func Set(object interface{}, path string, value interface{}) error {
-	pathParts, err := tokenisePath(path)
+	pathParts, err := parsePath(path)
 	if err != nil {
 		return err
 	}
@@ -47,27 +54,27 @@ func Set(object interface{}, path string, value interface{}) error {
 	return nil
 }
 
-func setNestedValues(object interface{}, path []string, value interface{}) (interface{}, error) {
+func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, error) {
 	var err error
 	final := len(path) == 0
 	if final {
 		return value, nil
 	}
-	fullKey := path[0]
-	keys, indexes, indexed, wildcard, err := parseKey(fullKey)
-	if err != nil {
-		return nil, err
-	}
+	segment := path[0]
+	fullKey := segment.raw
 
 	switch obj := object.(type) {
 	case map[string]interface{}:
-		if wildcard {
-			keys = []string{}
+		keys := []string{}
+		if segment.isWildcard {
 			for k := range obj {
 				keys = append(keys, k)
 			}
-		} else if indexed {
-			return nil, &Error{NotFound, fmt.Sprintf("map type cannot be set with an index (%s)", fullKey)}
+		} else {
+			if segment.isIndex {
+				return nil, &Error{NotFound, fmt.Sprintf("cannot set map with an index (%s)", fullKey)}
+			}
+			keys = segment.keys
 		}
 
 		for _, k := range keys {
@@ -78,13 +85,13 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 	case []interface{}:
 
 		var idxs []int
-		if wildcard {
+		if segment.isWildcard {
 			idxs = makeRange(0, len(obj)-1)
 		} else {
-			if !indexed {
-				return nil, &Error{NotFound, fmt.Sprintf("slice type cannot be set with a key (%s)", fullKey)}
+			if segment.isKey {
+				return nil, &Error{NotFound, fmt.Sprintf("cannot set array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(indexes, len(obj))
+			idxs, err = parseIndexes(segment.indexes, len(obj))
 			if err != nil {
 				return nil, err
 			}
@@ -98,12 +105,12 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 		return obj, err
 
 	default:
-		if wildcard {
+		if segment.isWildcard {
 			return nil, &Error{NotFound, fmt.Sprintf("cannot set using a wildcard on a non-existing path (%s)", fullKey)}
 		}
-		if indexed {
+		if segment.isIndex {
 			new := []interface{}{}
-			parsed, err := parseIndexes(indexes, 0)
+			parsed, err := parseIndexes(segment.indexes, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -115,7 +122,7 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 
 		} else {
 			new := map[string]interface{}{}
-			for _, k := range keys {
+			for _, k := range segment.keys {
 				new[k], err = setNestedValues(nil, path[1:], value)
 			}
 			return new, err
@@ -125,7 +132,7 @@ func setNestedValues(object interface{}, path []string, value interface{}) (inte
 }
 
 func Get(object interface{}, path string) (interface{}, error) {
-	pathParts, err := tokenisePath(path)
+	pathParts, err := parsePath(path)
 	if err != nil {
 		return nil, err
 	}
@@ -137,28 +144,29 @@ func Get(object interface{}, path string) (interface{}, error) {
 	return value, nil
 }
 
-func getNestedValues(object interface{}, path []string) (interface{}, error) {
+func getNestedValues(object interface{}, path []segment) (interface{}, error) {
 	final := len(path) == 0
 	if final {
 		return object, nil
 	}
-	fullKey := path[0]
-	keys, indexes, indexed, wildcard, err := parseKey(fullKey)
-	if err != nil {
-		return nil, err
-	}
+	var err error
+	segment := path[0]
+	fullKey := segment.raw
 
 	result := []interface{}{}
 
 	switch obj := object.(type) {
 	case map[string]interface{}:
-		if wildcard {
-			keys = []string{}
+		var keys []string
+		if segment.isWildcard {
 			for k := range obj {
 				keys = append(keys, k)
 			}
-		} else if indexed {
-			return nil, &Error{NotFound, fmt.Sprintf("map type cannot be accessed with an index (%s)", fullKey)}
+		} else {
+			if segment.isIndex {
+				return nil, &Error{NotFound, fmt.Sprintf("cannot access map with an index (%s)", fullKey)}
+			}
+			keys = segment.keys
 		}
 
 		for _, k := range keys {
@@ -174,13 +182,13 @@ func getNestedValues(object interface{}, path []string) (interface{}, error) {
 
 	case []interface{}:
 		var idxs []int
-		if wildcard {
+		if segment.isWildcard {
 			idxs = makeRange(0, len(obj)-1)
 		} else {
-			if !indexed {
-				return nil, &Error{NotFound, fmt.Sprintf("slice type cannot be accessed with a key (%s)", fullKey)}
+			if segment.isKey {
+				return nil, &Error{NotFound, fmt.Sprintf("cannot access array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(indexes, len(obj))
+			idxs, err = parseIndexes(segment.indexes, len(obj))
 			if err != nil {
 				return nil, err
 			}
@@ -210,33 +218,103 @@ func getNestedValues(object interface{}, path []string) (interface{}, error) {
 	return result, nil
 }
 
-func tokenisePath(path string) ([]string, error) {
+func parsePath(path string) ([]segment, error) {
+	segments := []segment{}
+	var err error
+	var key string
+	var keyEnd bool
+	var inBracket bool
+	var inQuote bool
+	var quoteChar rune
+
 	path = strings.TrimPrefix(path, "$")
 	path = strings.TrimPrefix(path, ".")
-	var tokens []string
-	for _, stem := range strings.Split(path, ".") {
-		if stem == "" {
-			return nil, &Error{InvalidPath, "empty path segment"}
-		}
-		found := indexRegex.FindAllString(stem, -1)
-		if found == nil {
-			tokens = append(tokens, stem)
-		} else {
-			indexStart := strings.Index(stem, "[")
-			if indexStart > 0 {
-				tokens = append(tokens, stem[:indexStart])
+	for i, c := range path {
+		if inQuote && c == quoteChar && lastChar(key) != "\\" {
+			inQuote = false
+
+		} else if !inQuote && (c == '\'' || c == '"') {
+			if !inBracket {
+				return nil, &Error{InvalidPath, "cannot use quotes outside of brackets"}
 			}
-			if invalidPathRegex.MatchString(stem[indexStart:]) {
-				return nil, &Error{InvalidPath, "mismatched brackets"}
-			}
-			tokens = append(tokens, found...)
+			inQuote = true
+			quoteChar = c
 		}
 
+		if c == '.' && !inQuote {
+			if i == len(path)-1 {
+				return nil, &Error{InvalidPath, "path cannot end with '.' separator"}
+			}
+			keyEnd = true
+		}
+
+		if c == '[' && !inQuote {
+			if inBracket {
+				return nil, &Error{InvalidPath, "missing closing bracket"}
+			}
+			inBracket = true
+			if i != 0 {
+				keyEnd = true
+			}
+		}
+
+		if c == ']' && !inQuote {
+			if !inBracket {
+				return nil, &Error{InvalidPath, "missing opening bracket"}
+			}
+			inBracket = false
+		}
+
+		if unicode.IsSpace(c) && !inQuote && !inBracket {
+			return nil, &Error{InvalidPath, "cannot use whitespace characters outside quotes and brackets"}
+		}
+
+		if keyEnd {
+			segments, err = addSegment(key, segments)
+			if err != nil {
+				return nil, err
+			}
+			key = ""
+			keyEnd = false
+			if c == '.' {
+				continue
+			}
+		}
+
+		key += string(c)
 	}
-	if len(tokens) == 0 {
-		return nil, &Error{InvalidPath, "empty path"}
+
+	if key != "" {
+		segments, err = addSegment(key, segments)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return tokens, nil
+
+	if inBracket {
+		return nil, &Error{InvalidPath, "missing closing bracket"}
+	}
+	if inQuote {
+		return nil, &Error{InvalidPath, "missing closing quote"}
+	}
+
+	return segments, nil
+}
+
+func addSegment(key string, segments []segment) ([]segment, error) {
+	keys, indexes, indexed, wildcard, err := parseKey(key)
+	if err != nil {
+		return segments, err
+	}
+	segments = append(segments, segment{
+		raw:        key,
+		keys:       keys,
+		indexes:    indexes,
+		isKey:      !indexed,
+		isIndex:    indexed,
+		isWildcard: wildcard,
+	})
+	return segments, nil
 }
 
 // Parses path keys
@@ -245,13 +323,13 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 	keys := []string{}
 	indexes := []index{}
 
+	if fullKey == "" {
+		return keys, indexes, false, false, &Error{InvalidPath, "empty path segment"}
+	}
+
 	// Is a wildcard
 	if fullKey == "*" {
 		return keys, indexes, false, true, nil
-	}
-
-	if len(fullKey) == 1 {
-		return []string{fullKey}, indexes, false, false, nil
 	}
 
 	// Check for square brackets
@@ -291,13 +369,9 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 
 		} else if !unicode.IsSpace(c) {
 			readSegment = true
-			if c == '\'' {
+			if c == '\'' || c == '"' {
+				quoteChar = c
 				quoted = true
-				quoteChar = '\''
-			}
-			if c == '"' {
-				quoted = true
-				quoteChar = '"'
 			}
 			segment += string(c)
 		}
@@ -305,7 +379,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 
 	if readSegment {
 		if quoted {
-			return keys, indexes, false, false, &Error{InvalidPath, "missing closing qupte"}
+			return keys, indexes, false, false, &Error{InvalidPath, "missing closing quote"}
 		}
 		keys = append(keys, segment)
 	}
@@ -365,7 +439,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 	}
 
 	if len(indexes) != len(keys) {
-		return keys, indexes, false, false, &Error{InvalidPath, "cannot specify both slice indexes and map keys in a multi-select"}
+		return keys, indexes, false, false, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
 	}
 
 	return keys, indexes, true, false, err
