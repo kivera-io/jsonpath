@@ -59,7 +59,7 @@ var example = `
 		"'single'": "single",
 		"\"double\"": "double",
 		"  spaces  ": "spaces",
-		"[.]": "specials"
+		"][.,": "specials"
 	}
 }`
 
@@ -190,7 +190,7 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 			{
-				name: "negative-index-1",
+				name: "negative-index-2",
 				args: args{
 					object: data,
 					path:   "key2.array[-2]",
@@ -652,7 +652,7 @@ func TestGet(t *testing.T) {
 				name: "quoted-special-characters-1",
 				args: args{
 					object: data,
-					path:   "key5['[.]']",
+					path:   "key5['][.,']",
 				},
 				want:    "specials",
 				wantErr: false,
@@ -661,7 +661,7 @@ func TestGet(t *testing.T) {
 				name: "quoted-special-characters-2",
 				args: args{
 					object: data,
-					path:   "key5[\"[.]\"]",
+					path:   "key5[\"][.,\"]",
 				},
 				want:    "specials",
 				wantErr: false,
@@ -918,459 +918,575 @@ func TestSet(t *testing.T) {
 		path   string
 		value  interface{}
 	}
-	tests := []struct {
-		name    string
-		args    args
-		want    interface{}
-		wantErr bool
+
+	tests := map[string][]struct {
+		name        string
+		args        args
+		want        interface{}
+		wantErr     bool
+		wantErrCode string
+		wantErrMsg  string
 	}{
-		{
-			name: "map-set-dot-notation-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": "val",
-			},
-			wantErr: false,
-		},
-		{
-			name: "map-set-dot-notation-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2.key3",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-					},
+		"map-set": {
+			{
+				name: "dot-notation-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1",
+					value:  "val",
 				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "map-set-bracket-notation",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "[key1][key2][key3]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-					},
+				want: map[string]interface{}{
+					"key1": "val",
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "map-set-mixed-notation",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1[key2].key3",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-					},
+			{
+				name: "dot-notation-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2.key3",
+					value:  "val",
 				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "map-set-mixed-notation-quotes",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1['key2'][\"key3\"]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "array-set-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1[0]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": []interface{}{
-					"val",
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "array-set-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[0]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						"val",
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "array-set-3",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[0].key3",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						map[string]interface{}{
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
 							"key3": "val",
 						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "set-object-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2.key3",
-				value: map[string]interface{}{
-					"key4": "val",
+			{
+				name: "bracket-notation",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "[key1][key2][key3]",
+					value:  "val",
 				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+						},
+					},
+				},
+				wantErr: false,
 			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
+			{
+				name: "mixed-notation",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1[key2].key3",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+						},
+					},
+				},
+				wantErr: false,
+			},
+			{
+				name: "mixed-notation-quotes",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1['key2'][\"key3\"]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+						},
+					},
+				},
+				wantErr: false,
+			},
+		},
+		"array-set": {
+			{
+				name: "single-index-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1[0]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": []interface{}{
+						"val",
+					},
+				},
+				wantErr: false,
+			},
+			{
+				name: "single-index-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[0]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							"val",
+						},
+					},
+				},
+				wantErr: false,
+			},
+			{
+				name: "single-index-3",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[0].key3",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							map[string]interface{}{
+								"key3": "val",
+							},
+						},
+					},
+				},
+				wantErr: false,
+			},
+		},
+		"object-set": {
+
+			{
+				name: "dot-notation-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2.key3",
+					value: map[string]interface{}{
+						"key4": "val",
+					},
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": map[string]interface{}{
+								"key4": "val",
+							},
+						},
+					},
+				},
+				wantErr: false,
+			},
+			{
+				name: "dot-notation-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2",
+					value: map[string]interface{}{
 						"key3": map[string]interface{}{
 							"key4": "val",
 						},
 					},
 				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "set-object-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2",
-				value: map[string]interface{}{
-					"key3": map[string]interface{}{
-						"key4": "val",
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": map[string]interface{}{
+								"key4": "val",
+							},
+						},
 					},
 				},
+				wantErr: false,
 			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
+			{
+				name: "dot-notation-3",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1[0]",
+					value: map[string]interface{}{
 						"key3": map[string]interface{}{
 							"key4": "val",
 						},
 					},
 				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "set-object-3",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1[0]",
-				value: map[string]interface{}{
-					"key3": map[string]interface{}{
-						"key4": "val",
-					},
-				},
-			},
-			want: map[string]interface{}{
-				"key1": []interface{}{
-					map[string]interface{}{
-						"key3": map[string]interface{}{
-							"key4": "val",
+				want: map[string]interface{}{
+					"key1": []interface{}{
+						map[string]interface{}{
+							"key3": map[string]interface{}{
+								"key4": "val",
+							},
 						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
 		},
-		{
-			name: "update-map-1",
-			args: args{
-				object: getData(),
-				path:   "key1.key2.key3.key4.key5",
-				value:  "test",
+		"update": {
+
+			{
+				name: "map-1",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key1"].(map[string]interface{})["key2"].(map[string]interface{})["key3"].(map[string]interface{})["key4"].(map[string]interface{})["key5"] = "test"
+					return expected
+				}(),
+				wantErr: false,
 			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key1"].(map[string]interface{})["key2"].(map[string]interface{})["key3"].(map[string]interface{})["key4"].(map[string]interface{})["key5"] = "test"
-				return expected
-			}(),
-			wantErr: false,
+			{
+				name: "array-1",
+				args: args{
+					object: getData(),
+					path:   "key2.array[0]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "array-2",
+				args: args{
+					object: getData(),
+					path:   "key2.array[0].subkey",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0].(map[string]interface{})["subkey"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "array-3",
+				args: args{
+					object: getData(),
+					path:   "key2.array[-1]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[2] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
 		},
-		{
-			name: "update-array-1",
-			args: args{
-				object: getData(),
-				path:   "key2.array[0]",
-				value:  "test",
-			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0] = "test"
-				return expected
-			}(),
-			wantErr: false,
-		},
-		{
-			name: "update-array-2",
-			args: args{
-				object: getData(),
-				path:   "key2.array[0].subkey",
-				value:  "test",
-			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0].(map[string]interface{})["subkey"] = "test"
-				return expected
-			}(),
-			wantErr: false,
-		},
-		{
-			name: "update-array-3",
-			args: args{
-				object: getData(),
-				path:   "key2.array[-1]",
-				value:  "test",
-			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[2] = "test"
-				return expected
-			}(),
-			wantErr: false,
-		},
-		{
-			name: "multi-set-map-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[key3,key4,key5]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-						"key4": "val",
-						"key5": "val",
+		"multi-set": {
+
+			{
+				name: "map-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[key3,key4,key5]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+							"key4": "val",
+							"key5": "val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "multi-set-map-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[ key3, key4, key5 ]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-						"key4": "val",
-						"key5": "val",
+			{
+				name: "map-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[ key3, key4, key5 ]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+							"key4": "val",
+							"key5": "val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "multi-set-map-3",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[key3,'key4',\"key5\"]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-						"key4": "val",
-						"key5": "val",
+			{
+				name: "map-3",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[key3,'key4',\"key5\"]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+							"key4": "val",
+							"key5": "val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "multi-set-map-4",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[ key3, 'key4', \"key5\" ]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": map[string]interface{}{
-						"key3": "val",
-						"key4": "val",
-						"key5": "val",
+			{
+				name: "map-4",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[ key3, 'key4', \"key5\" ]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": map[string]interface{}{
+							"key3": "val",
+							"key4": "val",
+							"key5": "val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "multi-set-array-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[0,1,2]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						"val",
-						"val",
-						"val",
+			{
+				name: "array-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[0,1,2]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							"val",
+							"val",
+							"val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "multi-set-array-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[ 0, 1, 2 ]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						"val",
-						"val",
-						"val",
+			{
+				name: "array-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[ 0, 1, 2 ]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							"val",
+							"val",
+							"val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
 		},
-		{
-			name: "range-set-array-1",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[0:2]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						"val",
-						"val",
+		"range-set": {
+
+			{
+				name: "array-1",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[0:2]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							"val",
+							"val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
-		},
-		{
-			name: "range-set-array-2",
-			args: args{
-				object: map[string]interface{}{},
-				path:   "key1.key2[0:4]",
-				value:  "val",
-			},
-			want: map[string]interface{}{
-				"key1": map[string]interface{}{
-					"key2": []interface{}{
-						"val",
-						"val",
-						"val",
-						"val",
+			{
+				name: "array-2",
+				args: args{
+					object: map[string]interface{}{},
+					path:   "key1.key2[0:4]",
+					value:  "val",
+				},
+				want: map[string]interface{}{
+					"key1": map[string]interface{}{
+						"key2": []interface{}{
+							"val",
+							"val",
+							"val",
+							"val",
+						},
 					},
 				},
+				wantErr: false,
 			},
-			wantErr: false,
 		},
-		{
-			name: "update-wildcard-1",
-			args: args{
-				object: getData(),
-				path:   "key3.array.*",
-				value:  "test",
+		"wildcard-update": {
+
+			{
+				name: "array",
+				args: args{
+					object: getData(),
+					path:   "key3.array.*",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = []interface{}{
+						"test", "test", "test", "test", "test", "test",
+					}
+					return expected
+				}(),
+				wantErr: false,
 			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = []interface{}{
-					"test", "test", "test", "test", "test", "test",
-				}
-				return expected
-			}(),
-			wantErr: false,
+			{
+				name: "map",
+				args: args{
+					object: getData(),
+					path:   "key3.map.*",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["map"] = map[string]interface{}{
+						"key1": "test",
+						"key2": "test",
+						"key3": "test",
+					}
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "nested-objects",
+				args: args{
+					object: getData(),
+					path:   "key4.*.key1",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key4"].([]interface{})[0].(map[string]interface{})["key1"] = "test"
+					expected.(map[string]interface{})["key4"].([]interface{})[1].(map[string]interface{})["key1"] = "test"
+					expected.(map[string]interface{})["key4"].([]interface{})[2].(map[string]interface{})["key1"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
 		},
-		{
-			name: "update-wildcard-2",
-			args: args{
-				object: getData(),
-				path:   "key3.map.*",
-				value:  "test",
+		"errors": {
+			{
+				name: "incorrect-access-type-1",
+				args: args{
+					object: getData(),
+					path:   "key3.map[0]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set map with an index",
 			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key3"].(map[string]interface{})["map"] = map[string]interface{}{
-					"key1": "test",
-					"key2": "test",
-					"key3": "test",
-				}
-				return expected
-			}(),
-			wantErr: false,
-		},
-		{
-			name: "update-wildcard-3",
-			args: args{
-				object: getData(),
-				path:   "key4.*.key1",
-				value:  "test",
+			{
+				name: "incorrect-access-type-2",
+				args: args{
+					object: getData(),
+					path:   "key3.map[0,1,2]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set map with an index",
 			},
-			want: func() interface{} {
-				expected := getData()
-				expected.(map[string]interface{})["key4"].([]interface{})[0].(map[string]interface{})["key1"] = "test"
-				expected.(map[string]interface{})["key4"].([]interface{})[1].(map[string]interface{})["key1"] = "test"
-				expected.(map[string]interface{})["key4"].([]interface{})[2].(map[string]interface{})["key1"] = "test"
-				return expected
-			}(),
-			wantErr: false,
+			{
+				name: "incorrect-access-type-3",
+				args: args{
+					object: getData(),
+					path:   "key3.map[0:2]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set map with an index",
+			},
+			{
+				name: "incorrect-access-type-4",
+				args: args{
+					object: getData(),
+					path:   "key3.array.key",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set array with a key",
+			},
+			{
+				name: "incorrect-access-type-5",
+				args: args{
+					object: getData(),
+					path:   "key3.array['key']",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set array with a key",
+			},
+			{
+				name: "incorrect-access-type-6",
+				args: args{
+					object: getData(),
+					path:   "key3.array['key1', 'key2']",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set array with a key",
+			},
+			{
+				name: "incorrect-access-type-7",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5.*",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := Set(tt.args.object, tt.args.path, tt.args.value); (err != nil) != tt.wantErr {
-				t.Errorf("Set() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if !reflect.DeepEqual(tt.args.object, tt.want) {
-				t.Errorf("data = %v, want %v", tt.args.object, tt.want)
-			}
-		})
+
+	for groupName, group := range tests {
+		for _, tt := range group {
+			testName := fmt.Sprintf("%s-%s", groupName, tt.name)
+			t.Run(testName, func(t *testing.T) {
+				err := Set(tt.args.object, tt.args.path, tt.args.value)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("Set() error = %v, wantErr %v", err, tt.wantErr)
+					return
+				}
+				if tt.wantErr {
+					if err.(*Error).Code != tt.wantErrCode {
+						t.Errorf("Get() errCode = %v, wantCode %v", err.(*Error).Code, tt.wantErrCode)
+					}
+					if !strings.Contains(err.Error(), tt.wantErrMsg) {
+						t.Errorf("Get() errMsg = %v, wantMsg %v", err.(*Error).Msg, tt.wantErrMsg)
+					}
+					return
+				}
+				if !reflect.DeepEqual(tt.args.object, tt.want) {
+					t.Errorf("data = %v, want %v", tt.args.object, tt.want)
+				}
+			})
+		}
 	}
 }
