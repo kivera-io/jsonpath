@@ -11,19 +11,10 @@ import (
 
 var rangeRegex = regexp.MustCompile(`^(-?\d+)?:(-?\d+)?$`)
 
-type Error struct {
-	Code string
-	Msg  string
+type Compiled struct {
+	raw      string
+	segments []segment
 }
-
-func (e *Error) Error() string {
-	return fmt.Sprintf("%s: %s", e.Code, e.Msg)
-}
-
-const (
-	NotFound    = "not_found"
-	InvalidPath = "invalid_path"
-)
 
 type segment struct {
 	raw        string
@@ -42,16 +33,71 @@ type index struct {
 	hasEnd   bool
 }
 
-func Set(object interface{}, path string, value interface{}) error {
-	pathParts, err := parsePath(path)
+type Error struct {
+	Code string
+	Msg  string
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Msg)
+}
+
+const (
+	NotFound    = "not_found"
+	InvalidPath = "invalid_path"
+)
+
+func Compile(path string) (*Compiled, error) {
+	segments, err := parsePath(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = setNestedValues(object, pathParts, value)
+	return &Compiled{
+		raw:      path,
+		segments: segments,
+	}, nil
+}
+
+func (c *Compiled) Set(object interface{}, value interface{}) error {
+	_, err := setNestedValues(object, c.segments, value)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *Compiled) Get(object interface{}) (interface{}, error) {
+	value, err := getNestedValues(object, c.segments)
+	if err != nil {
+		return nil, err
+
+	}
+	return value, nil
+}
+
+func Set(object interface{}, path string, value interface{}) error {
+	segments, err := parsePath(path)
+	if err != nil {
+		return err
+	}
+	_, err = setNestedValues(object, segments, value)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func Get(object interface{}, path string) (interface{}, error) {
+	segments, err := parsePath(path)
+	if err != nil {
+		return nil, err
+	}
+	value, err := getNestedValues(object, segments)
+	if err != nil {
+		return nil, err
+
+	}
+	return value, nil
 }
 
 func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, error) {
@@ -129,19 +175,6 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 
 		}
 	}
-}
-
-func Get(object interface{}, path string) (interface{}, error) {
-	pathParts, err := parsePath(path)
-	if err != nil {
-		return nil, err
-	}
-	value, err := getNestedValues(object, pathParts)
-	if err != nil {
-		return nil, err
-
-	}
-	return value, nil
 }
 
 func getNestedValues(object interface{}, path []segment) (interface{}, error) {

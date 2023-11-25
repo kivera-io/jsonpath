@@ -1,8 +1,6 @@
 # JSON Path
 
-Get and set values in a JSON object using jsonpath format.
-
-This library allows you to retrieve and update any value in a JSON string using jsonpath format. The value can be of any type, concrete or not.
+A golang implementation of jsonpath notation that allows you to retrieve and update any value in a JSON object. The value can be of any type, concrete or not.
 
 ## Path Operators
 The following operators are available. All operators can be used to both set and get values.
@@ -66,6 +64,39 @@ if err != nil {
 }
 fmt.Println(val)
 ```
+
+You can alternatively compile the json path for re-use in order to improve performance.
+
+```
+import "github.com/kivera-io/jsonpath"
+
+example := "{}"
+var data interface{}
+
+err := json.Unmarshal([]byte(example), &data)
+if err != nil {
+    panic(err)
+}
+
+j, err := jsonpath.Compile("test.path")
+if err != nil {
+    panic(err)
+}
+
+// set value at a path
+err = j.Set(data, "value")
+if err != nil {
+    panic(err)
+}
+
+// get value at a path
+val, err := j.Get(data)
+if err != nil {
+    panic(err)
+}
+fmt.Println(val)
+```
+
 ## Error Handling
 
 There are two types of errors that can be thrown. Ether  `InvalidPath` or `NotFound`.
