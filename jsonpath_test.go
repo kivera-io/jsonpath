@@ -3,11 +3,14 @@ package jsonpath
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 )
+
+var runTest = os.Getenv("TEST_NAME")
 
 var example = `
 {
@@ -60,6 +63,23 @@ var example = `
 		"\"double\"": "double",
 		"  spaces  ": "spaces",
 		"][.,": "specials"
+	},
+	"key6": {
+		"recursive": "val1",
+		"key7": {
+			"recursive": "val2",
+			"key8": {
+				"recursive": "val3"
+			},
+			"key9": [
+				{
+					"recursive": "val4"
+				},
+				{
+					"recursive": "val5"
+				}
+			]
+		}
 	}
 }`
 
@@ -332,7 +352,7 @@ func TestGet(t *testing.T) {
 					object: data,
 					path:   "key3.array[2:3]",
 				},
-				want:    "val2",
+				want:    []interface{}{"val2"},
 				wantErr: false,
 			},
 			{
@@ -667,6 +687,47 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 		},
+		"recursive": {
+			{
+				name: "get-nested-1",
+				args: args{
+					object: data,
+					path:   "key6..recursive",
+				},
+				want: []interface{}{
+					"val1",
+					"val2",
+					"val3",
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
+			{
+				name: "get-nested-2",
+				args: args{
+					object: data,
+					path:   "key6['key7'].key9..recursive",
+				},
+				want: []interface{}{
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
+			{
+				name: "get-nested-3",
+				args: args{
+					object: data,
+					path:   "key6..key9[0,1].recursive",
+				},
+				want: []interface{}{
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
+		},
 		"errors": {
 			{
 				name: "missing-key-1",
@@ -772,11 +833,11 @@ func TestGet(t *testing.T) {
 				name: "invalid-path-1",
 				args: args{
 					object: data,
-					path:   "key1..key2",
+					path:   "key1. .key2",
 				},
 				wantErr:     true,
 				wantErrCode: InvalidPath,
-				wantErrMsg:  "empty path segment",
+				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
 			},
 			{
 				name: "invalid-path-2",
@@ -878,11 +939,59 @@ func TestGet(t *testing.T) {
 				wantErrCode: InvalidPath,
 				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
 			},
+			{
+				name: "invalid-path-12",
+				args: args{
+					object: data,
+					path:   "key1...key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-path-13",
+				args: args{
+					object: data,
+					path:   "... ..key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-path-14",
+				args: args{
+					object: data,
+					path:   "key1.key2..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+		},
+		"multi-method": {
+			{
+				name: "wildcard-and-recursive",
+				args: args{
+					object: data,
+					path:   "key6[key7].*..recursive",
+				},
+				want: []interface{}{
+					"val3",
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
 		},
 	}
 	for groupName, group := range tests {
 		for _, tt := range group {
 			testName := fmt.Sprintf("%s-%s", groupName, tt.name)
+			if runTest != "" && testName != runTest {
+				continue
+			}
 			t.Run(testName, func(t *testing.T) {
 				got, err := Get(tt.args.object, tt.args.path)
 				if (err != nil) != tt.wantErr {
@@ -898,7 +1007,7 @@ func TestGet(t *testing.T) {
 					}
 					return
 				}
-				if strings.HasPrefix(testName, "wildcard-map-") {
+				if strings.HasPrefix(testName, "wildcard-") || strings.HasPrefix(testName, "recursive-") {
 					sort.Slice(got, func(i, j int) bool {
 						return got.([]interface{})[i].(string) < got.([]interface{})[j].(string)
 					})
@@ -1182,7 +1291,6 @@ func TestSet(t *testing.T) {
 			},
 		},
 		"multi-set": {
-
 			{
 				name: "map-1",
 				args: args{
@@ -1462,12 +1570,105 @@ func TestSet(t *testing.T) {
 				wantErrCode: NotFound,
 				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
 			},
+			{
+				name: "incorrect-access-type-8",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5.*",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+			},
+			{
+				name: "incorrect-access-type-9",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5.*",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+			},
+		},
+		"recursive-set": {
+			{
+				name: "nested-1",
+				args: args{
+					object: getData(),
+					path:   "key6..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key8"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "nested-2",
+				args: args{
+					object: getData(),
+					path:   "key6['key7'].key9..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "nested-3",
+				args: args{
+					object: getData(),
+					path:   "key6..key9[0,1].recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+		},
+		"multi-method": {
+			{
+				name: "wildcard-and-recursive",
+				args: args{
+					object: getData(),
+					path:   "key6[key7].*..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key8"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
 		},
 	}
 
 	for groupName, group := range tests {
 		for _, tt := range group {
 			testName := fmt.Sprintf("%s-%s", groupName, tt.name)
+			if runTest != "" && testName != runTest {
+				continue
+			}
 			t.Run(testName, func(t *testing.T) {
 				err := Set(tt.args.object, tt.args.path, tt.args.value)
 				if (err != nil) != tt.wantErr {

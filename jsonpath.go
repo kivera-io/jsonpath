@@ -3,6 +3,7 @@ package jsonpath
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,15 +15,18 @@ var rangeRegex = regexp.MustCompile(`^(-?\d+)?:(-?\d+)?$`)
 type Compiled struct {
 	raw      string
 	segments []segment
+	hasMulti bool
 }
 
 type segment struct {
-	raw        string
-	keys       []string
-	indexes    []index
-	isKey      bool
-	isIndex    bool
-	isWildcard bool
+	raw         string
+	keys        []string
+	indexes     []index
+	isKey       bool
+	isIndex     bool
+	isWildcard  bool
+	isRecursive bool
+	isMulti     bool
 }
 
 type index struct {
@@ -43,20 +47,10 @@ func (e *Error) Error() string {
 }
 
 const (
-	NotFound    = "not_found"
-	InvalidPath = "invalid_path"
+	NotFound      = "not_found"
+	InvalidPath   = "invalid_path"
+	RecursiveMiss = "recursive_miss"
 )
-
-func Compile(path string) (*Compiled, error) {
-	segments, err := parsePath(path)
-	if err != nil {
-		return nil, err
-	}
-	return &Compiled{
-		raw:      path,
-		segments: segments,
-	}, nil
-}
 
 func (c *Compiled) Set(object interface{}, value interface{}) error {
 	_, err := setNestedValues(object, c.segments, value)
@@ -70,74 +64,77 @@ func (c *Compiled) Get(object interface{}) (interface{}, error) {
 	value, err := getNestedValues(object, c.segments)
 	if err != nil {
 		return nil, err
-
+	}
+	if !c.hasMulti {
+		return value[0], nil
 	}
 	return value, nil
 }
 
 func Set(object interface{}, path string, value interface{}) error {
-	segments, err := parsePath(path)
+	compiled, err := Compile(path)
 	if err != nil {
 		return err
 	}
-	_, err = setNestedValues(object, segments, value)
-	if err != nil {
-		return err
-	}
-	return nil
+	return compiled.Set(object, value)
 }
 
 func Get(object interface{}, path string) (interface{}, error) {
-	segments, err := parsePath(path)
+	compiled, err := Compile(path)
 	if err != nil {
 		return nil, err
 	}
-	value, err := getNestedValues(object, segments)
-	if err != nil {
-		return nil, err
-
-	}
-	return value, nil
+	return compiled.Get(object)
 }
 
-func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, error) {
-	var err error
+func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, *Error) {
+	var err *Error
 	final := len(path) == 0
 	if final {
 		return value, nil
 	}
-	segment := path[0]
-	fullKey := segment.raw
+	seg := path[0]
+	fullKey := seg.raw
 
 	switch obj := object.(type) {
 	case map[string]interface{}:
 		keys := []string{}
-		if segment.isWildcard {
+		if seg.isWildcard || seg.isRecursive {
 			for k := range obj {
 				keys = append(keys, k)
 			}
 		} else {
-			if segment.isIndex {
+			if seg.isIndex {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot set map with an index (%s)", fullKey)}
 			}
-			keys = segment.keys
+			keys = seg.keys
 		}
 
 		for _, k := range keys {
-			obj[k], err = setNestedValues(obj[k], path[1:], value)
+			nextPath := path[1:]
+			if seg.isRecursive && !slices.Contains(seg.keys, k) {
+				nextPath = path
+			}
+			temp, err := setNestedValues(obj[k], nextPath, value)
+			if err != nil && err.Code != RecursiveMiss {
+				return nil, err
+			}
+			if temp != nil {
+				obj[k] = temp
+			}
 		}
-		return obj, err
+		return obj, nil
 
 	case []interface{}:
 
 		var idxs []int
-		if segment.isWildcard {
+		if seg.isWildcard || seg.isRecursive {
 			idxs = makeRange(0, len(obj)-1)
 		} else {
-			if segment.isKey {
+			if seg.isKey {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot set array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(segment.indexes, len(obj))
+			idxs, err = parseIndexes(seg.indexes, len(obj))
 			if err != nil {
 				return nil, err
 			}
@@ -145,18 +142,31 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 		}
 
 		for _, i := range idxs {
-			obj[i], err = setNestedValues(obj[i], path[1:], value)
+			nextPath := path[1:]
+			if seg.isRecursive {
+				nextPath = path
+			}
+			temp, err := setNestedValues(obj[i], nextPath, value)
+			if err != nil && err.Code != RecursiveMiss {
+				return nil, err
+			}
+			if temp != nil {
+				obj[i] = temp
+			}
 		}
 
-		return obj, err
+		return obj, nil
 
 	default:
-		if segment.isWildcard {
+		if seg.isWildcard {
 			return nil, &Error{NotFound, fmt.Sprintf("cannot set using a wildcard on a non-existing path (%s)", fullKey)}
 		}
-		if segment.isIndex {
+		if seg.isRecursive {
+			return nil, &Error{RecursiveMiss, fmt.Sprintf("recursive path not found (%s)", fullKey)}
+		}
+		if seg.isIndex {
 			new := []interface{}{}
-			parsed, err := parseIndexes(segment.indexes, 0)
+			parsed, err := parseIndexes(seg.indexes, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -168,7 +178,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 
 		} else {
 			new := map[string]interface{}{}
-			for _, k := range segment.keys {
+			for _, k := range seg.keys {
 				new[k], err = setNestedValues(nil, path[1:], value)
 			}
 			return new, err
@@ -177,51 +187,57 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 	}
 }
 
-func getNestedValues(object interface{}, path []segment) (interface{}, error) {
+func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error) {
+	var err *Error
 	final := len(path) == 0
 	if final {
-		return object, nil
+		return []interface{}{object}, nil
 	}
-	var err error
-	segment := path[0]
-	fullKey := segment.raw
+	seg := path[0]
+	fullKey := seg.raw
 
 	result := []interface{}{}
 
 	switch obj := object.(type) {
 	case map[string]interface{}:
 		var keys []string
-		if segment.isWildcard {
+		if seg.isWildcard || seg.isRecursive {
 			for k := range obj {
 				keys = append(keys, k)
 			}
 		} else {
-			if segment.isIndex {
+			if seg.isIndex {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot access map with an index (%s)", fullKey)}
 			}
-			keys = segment.keys
+			keys = seg.keys
 		}
 
 		for _, k := range keys {
 			if _, ok := obj[k]; !ok {
 				return nil, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
 			}
-			temp, err := getNestedValues(obj[k], path[1:])
-			if err != nil {
+			nextPath := path[1:]
+			if seg.isRecursive && !slices.Contains(seg.keys, k) {
+				nextPath = path
+			}
+			temp, err := getNestedValues(obj[k], nextPath)
+			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
-			result = append(result, temp)
+			if temp != nil {
+				result = append(result, temp...)
+			}
 		}
 
 	case []interface{}:
 		var idxs []int
-		if segment.isWildcard {
+		if seg.isWildcard || seg.isRecursive {
 			idxs = makeRange(0, len(obj)-1)
 		} else {
-			if segment.isKey {
+			if seg.isKey {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot access array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(segment.indexes, len(obj))
+			idxs, err = parseIndexes(seg.indexes, len(obj))
 			if err != nil {
 				return nil, err
 			}
@@ -231,29 +247,34 @@ func getNestedValues(object interface{}, path []segment) (interface{}, error) {
 			if i >= len(obj) || i < 0 {
 				return nil, &Error{NotFound, fmt.Sprintf("index out of range (%s)", fullKey)}
 			}
-			temp, err := getNestedValues(obj[i], path[1:])
-			if err != nil {
+			nextPath := path[1:]
+			if seg.isRecursive {
+				nextPath = path
+			}
+			temp, err := getNestedValues(obj[i], nextPath)
+			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
-			result = append(result, temp)
+			if temp != nil {
+				result = append(result, temp...)
+			}
 		}
 
 	default:
-		if !final {
-			return nil, &Error{NotFound, "path not found"}
+		if seg.isRecursive {
+			return nil, &Error{RecursiveMiss, fmt.Sprintf("recursive path not found (%s)", fullKey)}
 		}
-		return obj, nil
+		return nil, &Error{NotFound, "path not found"}
 	}
 
-	if len(result) == 1 {
-		return result[0], nil
-	}
 	return result, nil
 }
 
-func parsePath(path string) ([]segment, error) {
-	segments := []segment{}
-	var err error
+func Compile(path string) (*Compiled, error) {
+	compiled := Compiled{
+		raw:      path,
+		segments: []segment{},
+	}
 	var key string
 	var keyEnd bool
 	var inBracket bool
@@ -261,7 +282,7 @@ func parsePath(path string) ([]segment, error) {
 	var quoteChar rune
 
 	path = strings.TrimPrefix(path, "$")
-	path = strings.TrimPrefix(path, ".")
+	// path = strings.TrimPrefix(path, ".")
 	for i, c := range path {
 		if inQuote && c == quoteChar && lastChar(key) != "\\" {
 			inQuote = false
@@ -274,7 +295,7 @@ func parsePath(path string) ([]segment, error) {
 			quoteChar = c
 		}
 
-		if c == '.' && !inQuote {
+		if c == '.' && !inQuote && key != "" && key != "." {
 			if i == len(path)-1 {
 				return nil, &Error{InvalidPath, "path cannot end with '.' separator"}
 			}
@@ -303,25 +324,30 @@ func parsePath(path string) ([]segment, error) {
 		}
 
 		if keyEnd {
-			segments, err = addSegment(key, segments)
+			segment, err := parseKey(key)
 			if err != nil {
 				return nil, err
 			}
+			compiled.segments = append(compiled.segments, segment)
+			compiled.hasMulti = compiled.hasMulti || segment.isMulti
+
 			key = ""
 			keyEnd = false
-			if c == '.' {
-				continue
-			}
+			// if c == '.' {
+			// 	continue
+			// }
 		}
 
 		key += string(c)
 	}
 
 	if key != "" {
-		segments, err = addSegment(key, segments)
+		segment, err := parseKey(key)
 		if err != nil {
 			return nil, err
 		}
+		compiled.segments = append(compiled.segments, segment)
+		compiled.hasMulti = compiled.hasMulti || segment.isMulti
 	}
 
 	if inBracket {
@@ -331,49 +357,53 @@ func parsePath(path string) ([]segment, error) {
 		return nil, &Error{InvalidPath, "missing closing quote"}
 	}
 
-	return segments, nil
-}
-
-func addSegment(key string, segments []segment) ([]segment, error) {
-	keys, indexes, indexed, wildcard, err := parseKey(key)
-	if err != nil {
-		return segments, err
-	}
-	segments = append(segments, segment{
-		raw:        key,
-		keys:       keys,
-		indexes:    indexes,
-		isKey:      !indexed,
-		isIndex:    indexed,
-		isWildcard: wildcard,
-	})
-	return segments, nil
+	return &compiled, nil
 }
 
 // Parses path keys
-func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
+// func parseKey(fullKey string) ([]string, []index, bool, bool, bool, error) {
+func parseKey(fullKey string) (segment, error) {
 	var err error
-	keys := []string{}
-	indexes := []index{}
+	result := segment{
+		raw:     fullKey,
+		keys:    []string{},
+		indexes: []index{},
+	}
+
+	fullKey = strings.TrimPrefix(fullKey, ".")
 
 	if fullKey == "" {
-		return keys, indexes, false, false, &Error{InvalidPath, "empty path segment"}
+		return result, &Error{InvalidPath, "empty path segment"}
 	}
 
 	// Is a wildcard
 	if fullKey == "*" {
-		return keys, indexes, false, true, nil
+		result.isWildcard = true
+		result.isMulti = true
+		return result, nil
+	}
+
+	// Is recursive
+	if string(fullKey[0]) == "." {
+		result.isRecursive = true
+		result.isMulti = true
+		fullKey = strings.TrimPrefix(fullKey, ".")
+		if fullKey == "" || string(fullKey[0]) == "." {
+			return result, &Error{InvalidPath, "invalid recursive path"}
+		}
 	}
 
 	// Check for square brackets
 	if string(fullKey[0]) != "[" || string(fullKey[len(fullKey)-1]) != "]" {
-		return []string{fullKey}, indexes, false, false, nil
+		result.isKey = true
+		result.keys = []string{fullKey}
+		return result, nil
 	}
 
-	key := fullKey[1 : len(fullKey)-1]
+	key := strings.TrimSpace(fullKey[1 : len(fullKey)-1])
 
 	if key == "" {
-		return keys, indexes, false, false, &Error{InvalidPath, "empty path segment"}
+		return result, &Error{InvalidPath, "empty path segment"}
 	}
 
 	// Split the key into it's parts
@@ -389,7 +419,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 				}
 				if c == ',' {
 					readSegment = false
-					keys = append(keys, segment)
+					result.keys = append(result.keys, segment)
 					segment = ""
 					continue
 				}
@@ -412,34 +442,36 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 
 	if readSegment {
 		if quoted {
-			return keys, indexes, false, false, &Error{InvalidPath, "missing closing quote"}
+			return result, &Error{InvalidPath, "missing closing quote"}
 		}
-		keys = append(keys, segment)
+		result.keys = append(result.keys, segment)
 	}
 
-	for i, k := range keys {
+	for i, k := range result.keys {
 		// Check for a wildcard
 		if k == "*" {
-			if len(keys) > 1 {
-				return keys, indexes, false, false, &Error{InvalidPath, "cannot use a wildcard with a multi-select"}
+			if len(result.keys) > 1 {
+				return result, &Error{InvalidPath, "cannot use a wildcard with a multi-select"}
 			}
-			return keys, indexes, false, true, nil
+			result.isWildcard = true
+			result.isMulti = true
+			return result, nil
 		}
 
 		// If quoted string (treat as a map key)
 		if len(k) >= 2 && string(k[0]) == "\"" && string(k[len(k)-1]) == "\"" {
-			keys[i] = k[1 : len(k)-1]
+			result.keys[i] = k[1 : len(k)-1]
 			continue
 		}
 		if len(k) >= 2 && string(k[0]) == "'" && string(k[len(k)-1]) == "'" {
-			keys[i] = k[1 : len(k)-1]
+			result.keys[i] = k[1 : len(k)-1]
 			continue
 		}
 
 		// Check if the key is an index
 		idx, err := strconv.Atoi(k)
 		if err == nil {
-			indexes = append(indexes, index{idx: idx})
+			result.indexes = append(result.indexes, index{idx: idx})
 			continue
 		}
 
@@ -450,7 +482,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 			if rangeKey[1] != "" {
 				start, err := strconv.Atoi(rangeKey[1])
 				if err != nil {
-					return keys, indexes, false, false, &Error{InvalidPath, "invalid range"}
+					return result, &Error{InvalidPath, "invalid range"}
 				}
 				idx.start = start
 				idx.hasStart = true
@@ -458,27 +490,37 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 			if rangeKey[2] != "" {
 				end, err := strconv.Atoi(rangeKey[2])
 				if err != nil {
-					return keys, indexes, false, false, &Error{InvalidPath, "invalid range"}
+					return result, &Error{InvalidPath, "invalid range"}
 				}
 				idx.end = end
 				idx.hasEnd = true
 			}
-			indexes = append(indexes, idx)
+			result.indexes = append(result.indexes, idx)
+			result.isMulti = true
 		}
 	}
 
-	if len(indexes) == 0 {
-		return keys, indexes, false, false, err
+	result.isMulti = result.isMulti || len(result.keys) > 1
+
+	if len(result.indexes) == 0 {
+		result.isKey = true
+		return result, nil
 	}
 
-	if len(indexes) != len(keys) {
-		return keys, indexes, false, false, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
+	result.isIndex = true
+
+	if len(result.indexes) != len(result.keys) {
+		return result, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
 	}
 
-	return keys, indexes, true, false, err
+	if result.isRecursive {
+		return result, &Error{InvalidPath, "cannot use recursive search with indexes"}
+	}
+
+	return result, err
 }
 
-func parseIndexes(indexes []index, length int) ([]int, error) {
+func parseIndexes(indexes []index, length int) ([]int, *Error) {
 	temp := map[int]struct{}{}
 	parsed := []int{}
 	for _, idx := range indexes {
