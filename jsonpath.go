@@ -55,6 +55,9 @@ const (
 func (c *Compiled) Set(object interface{}, value interface{}) error {
 	_, err := setNestedValues(object, c.segments, value)
 	if err != nil {
+		if err.Code == RecursiveMiss {
+			err = &Error{NotFound, err.Msg}
+		}
 		return err
 	}
 	return nil
@@ -63,7 +66,12 @@ func (c *Compiled) Set(object interface{}, value interface{}) error {
 func (c *Compiled) Get(object interface{}) (interface{}, error) {
 	value, err := getNestedValues(object, c.segments)
 	if err != nil {
-		return nil, err
+		if err.Code == NotFound {
+			return nil, err
+		}
+		if err.Code == RecursiveMiss && len(value) == 0 {
+			return nil, &Error{NotFound, "path not found"}
+		}
 	}
 	if !c.hasMulti {
 		return value[0], nil
@@ -89,6 +97,8 @@ func Get(object interface{}, path string) (interface{}, error) {
 
 func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, *Error) {
 	var err *Error
+	var temp interface{}
+
 	final := len(path) == 0
 	if final {
 		return value, nil
@@ -115,7 +125,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			if seg.isRecursive && !slices.Contains(seg.keys, k) {
 				nextPath = path
 			}
-			temp, err := setNestedValues(obj[k], nextPath, value)
+			temp, err = setNestedValues(obj[k], nextPath, value)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -123,7 +133,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 				obj[k] = temp
 			}
 		}
-		return obj, nil
+		return obj, err
 
 	case []interface{}:
 
@@ -146,7 +156,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			if seg.isRecursive {
 				nextPath = path
 			}
-			temp, err := setNestedValues(obj[i], nextPath, value)
+			temp, err = setNestedValues(obj[i], nextPath, value)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -155,7 +165,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			}
 		}
 
-		return obj, nil
+		return obj, err
 
 	default:
 		if seg.isWildcard {
@@ -182,13 +192,14 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 				new[k], err = setNestedValues(nil, path[1:], value)
 			}
 			return new, err
-
 		}
 	}
 }
 
 func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error) {
 	var err *Error
+	var temp []interface{}
+
 	final := len(path) == 0
 	if final {
 		return []interface{}{object}, nil
@@ -216,16 +227,21 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 			if _, ok := obj[k]; !ok {
 				return nil, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
 			}
-			nextPath := path[1:]
-			if seg.isRecursive && !slices.Contains(seg.keys, k) {
-				nextPath = path
+			nextPaths := [][]segment{}
+			if seg.isRecursive {
+				nextPaths = append(nextPaths, path)
 			}
-			temp, err := getNestedValues(obj[k], nextPath)
-			if err != nil && err.Code != RecursiveMiss {
-				return nil, err
+			if !seg.isRecursive || slices.Contains(seg.keys, k) {
+				nextPaths = append(nextPaths, path[1:])
 			}
-			if temp != nil {
-				result = append(result, temp...)
+			for _, p := range nextPaths {
+				temp, err = getNestedValues(obj[k], p)
+				if err != nil && err.Code != RecursiveMiss {
+					return nil, err
+				}
+				if temp != nil {
+					result = append(result, temp...)
+				}
 			}
 		}
 
@@ -251,7 +267,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 			if seg.isRecursive {
 				nextPath = path
 			}
-			temp, err := getNestedValues(obj[i], nextPath)
+			temp, err = getNestedValues(obj[i], nextPath)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -267,7 +283,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 		return nil, &Error{NotFound, "path not found"}
 	}
 
-	return result, nil
+	return result, err
 }
 
 func Compile(path string) (*Compiled, error) {
@@ -281,8 +297,15 @@ func Compile(path string) (*Compiled, error) {
 	var inQuote bool
 	var quoteChar rune
 
+	if path == "" {
+		return &compiled, &Error{InvalidPath, "empty path"}
+	}
+
 	path = strings.TrimPrefix(path, "$")
-	// path = strings.TrimPrefix(path, ".")
+	if path == "." {
+		return &compiled, nil
+	}
+
 	for i, c := range path {
 		if inQuote && c == quoteChar && lastChar(key) != "\\" {
 			inQuote = false
@@ -333,9 +356,6 @@ func Compile(path string) (*Compiled, error) {
 
 			key = ""
 			keyEnd = false
-			// if c == '.' {
-			// 	continue
-			// }
 		}
 
 		key += string(c)

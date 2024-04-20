@@ -80,6 +80,15 @@ var example = `
 				}
 			]
 		}
+	},
+	"key7": {
+		"recursive": [
+			{
+				"recursive": {
+					"recursive": true
+				}
+			}
+		]
 	}
 }`
 
@@ -103,10 +112,41 @@ func TestGet(t *testing.T) {
 		name        string
 		args        args
 		want        interface{}
+		wantJson    string
+		sortResult  bool
 		wantErr     bool
 		wantErrCode string
 		wantErrMsg  string
 	}{
+		"base": {
+			{
+				name: "get-whole-1",
+				args: args{
+					object: data,
+					path:   "$",
+				},
+				want:    data,
+				wantErr: false,
+			},
+			{
+				name: "get-whole-2",
+				args: args{
+					object: data,
+					path:   "$.",
+				},
+				want:    data,
+				wantErr: false,
+			},
+			{
+				name: "get-whole-3",
+				args: args{
+					object: data,
+					path:   ".",
+				},
+				want:    data,
+				wantErr: false,
+			},
+		},
 		"map-access": {
 			{
 				name: "dot-notation",
@@ -492,7 +532,8 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "array-2",
@@ -508,7 +549,8 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "array-3",
@@ -524,7 +566,22 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
+			},
+			{
+				name: "array-4",
+				args: args{
+					object: data,
+					path:   "key4.*.key1",
+				},
+				want: []interface{}{
+					"val1",
+					"val2",
+					"val3",
+				},
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "map-1",
@@ -537,7 +594,8 @@ func TestGet(t *testing.T) {
 					"val2",
 					"val3",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "map-2",
@@ -550,7 +608,8 @@ func TestGet(t *testing.T) {
 					"val2",
 					"val3",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "map-3",
@@ -563,7 +622,8 @@ func TestGet(t *testing.T) {
 					"val2",
 					"val3",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 		},
 		"get-object": {
@@ -701,7 +761,8 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "get-nested-2",
@@ -713,7 +774,8 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
-				wantErr: false,
+				wantErr:    false,
+				sortResult: true,
 			},
 			{
 				name: "get-nested-3",
@@ -725,7 +787,28 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
+				wantErr:    false,
+				sortResult: true,
+			},
+			{
+				name: "get-nested-4",
+				args: args{
+					object: data,
+					path:   "key2..subkey",
+				},
+				want: []interface{}{
+					"val",
+				},
 				wantErr: false,
+			},
+			{
+				name: "get-nested-5",
+				args: args{
+					object: data,
+					path:   "key7..recursive",
+				},
+				wantJson: "[true,{\"recursive\":true},[{\"recursive\":{\"recursive\":true}}]]",
+				wantErr:  false,
 			},
 		},
 		"errors": {
@@ -820,10 +903,40 @@ func TestGet(t *testing.T) {
 				wantErrMsg:  "cannot access array with a key",
 			},
 			{
-				name: "path-not-found",
+				name: "path-not-found-1",
 				args: args{
 					object: data,
 					path:   "key1.key2.key3.key4.key5.key6",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "path not found",
+			},
+			{
+				name: "path-not-found-2",
+				args: args{
+					object: data,
+					path:   "key1..missing",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "path not found",
+			},
+			{
+				name: "path-not-found-3",
+				args: args{
+					object: data,
+					path:   "key6..recursive.missing",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "path not found",
+			},
+			{
+				name: "path-not-found-4",
+				args: args{
+					object: data,
+					path:   "..missing",
 				},
 				wantErr:     true,
 				wantErrCode: NotFound,
@@ -969,13 +1082,78 @@ func TestGet(t *testing.T) {
 				wantErrCode: InvalidPath,
 				wantErrMsg:  "invalid recursive path",
 			},
+			{
+				name: "invalid-path-15",
+				args: args{
+					object: data,
+					path:   "..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-path-16",
+				args: args{
+					object: data,
+					path:   "$..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
 		},
 		"multi-method": {
+			{
+				name: "mapp-and-index",
+				args: args{
+					object: data,
+					path:   "$.key3['array'][2]",
+				},
+				want:    "val2",
+				wantErr: false,
+			},
 			{
 				name: "wildcard-and-recursive",
 				args: args{
 					object: data,
 					path:   "key6[key7].*..recursive",
+				},
+				want: []interface{}{
+					"val3",
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
+			{
+				name: "recursive-and-index",
+				args: args{
+					object: data,
+					path:   "key6..key9[0].recursive",
+				},
+				want: []interface{}{
+					"val4",
+				},
+				wantErr: false,
+			},
+			{
+				name: "recursive-and-index-range",
+				args: args{
+					object: data,
+					path:   "key6..key9[0:2].recursive",
+				},
+				want: []interface{}{
+					"val4",
+					"val5",
+				},
+				wantErr: false,
+			},
+			{
+				name: "recursive-and-mulit-access",
+				args: args{
+					object: data,
+					path:   "key6.key7['key8','key9']..recursive",
 				},
 				want: []interface{}{
 					"val3",
@@ -1007,13 +1185,24 @@ func TestGet(t *testing.T) {
 					}
 					return
 				}
-				if strings.HasPrefix(testName, "wildcard-") || strings.HasPrefix(testName, "recursive-") {
-					sort.Slice(got, func(i, j int) bool {
-						return got.([]interface{})[i].(string) < got.([]interface{})[j].(string)
-					})
+				if tt.wantJson != "" {
+					resp, err := json.Marshal(got)
+					if err != nil {
+						t.Errorf("Get() error = %v", err)
+					}
+					if string(resp) != tt.wantJson {
+						t.Errorf("Get() = %v, want %v", string(resp), tt.wantJson)
+					}
 				}
-				if !reflect.DeepEqual(got, tt.want) {
-					t.Errorf("Get() = %v, want %v", got, tt.want)
+				if tt.want != nil {
+					if tt.sortResult {
+						sort.Slice(got, func(i, j int) bool {
+							return got.([]interface{})[i].(string) < got.([]interface{})[j].(string)
+						})
+					}
+					if !reflect.DeepEqual(got, tt.want) {
+						t.Errorf("Get() = %v, want %v", got, tt.want)
+					}
 				}
 			})
 		}
@@ -1165,7 +1354,6 @@ func TestSet(t *testing.T) {
 			},
 		},
 		"object-set": {
-
 			{
 				name: "dot-notation-1",
 				args: args{
@@ -1440,7 +1628,6 @@ func TestSet(t *testing.T) {
 			},
 		},
 		"wildcard-update": {
-
 			{
 				name: "array",
 				args: args{
@@ -1592,6 +1779,17 @@ func TestSet(t *testing.T) {
 				wantErrCode: NotFound,
 				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
 			},
+			{
+				name: "incorrect-access-type-10",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5..recursive",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "recursive path not found",
+			},
 		},
 		"recursive-set": {
 			{
@@ -1638,6 +1836,34 @@ func TestSet(t *testing.T) {
 					expected := getData()
 					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
 					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "nested-4",
+				args: args{
+					object: getData(),
+					path:   "key7..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "nested-5",
+				args: args{
+					object: getData(),
+					path:   "key7..recursive[0].recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["recursive"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
 					return expected
 				}(),
 				wantErr: false,
