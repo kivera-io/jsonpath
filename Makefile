@@ -3,4 +3,4 @@ SHELL=/bin/bash
 .EXPORT_ALL_VARIABLES:
 
 test:
-	go test . -v
+	go test .

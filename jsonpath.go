@@ -53,12 +53,15 @@ const (
 )
 
 func (c *Compiled) Set(object interface{}, value interface{}) error {
-	_, err := setNestedValues(object, c.segments, value)
+	var valueSet bool
+	_, err := setNestedValues(object, c.segments, value, &valueSet)
 	if err != nil {
-		if err.Code == RecursiveMiss {
-			err = &Error{NotFound, err.Msg}
+		if err.Code != RecursiveMiss {
+			return err
 		}
-		return err
+		if !valueSet {
+			return &Error{NotFound, err.Msg}
+		}
 	}
 	return nil
 }
@@ -66,14 +69,14 @@ func (c *Compiled) Set(object interface{}, value interface{}) error {
 func (c *Compiled) Get(object interface{}) (interface{}, error) {
 	value, err := getNestedValues(object, c.segments)
 	if err != nil {
-		if err.Code == NotFound {
+		if err.Code != RecursiveMiss {
 			return nil, err
 		}
-		if err.Code == RecursiveMiss && len(value) == 0 {
+		if len(value) == 0 {
 			return nil, &Error{NotFound, "path not found"}
 		}
 	}
-	if !c.hasMulti {
+	if !c.hasMulti && len(value) == 1 {
 		return value[0], nil
 	}
 	return value, nil
@@ -95,12 +98,13 @@ func Get(object interface{}, path string) (interface{}, error) {
 	return compiled.Get(object)
 }
 
-func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, *Error) {
+func setNestedValues(object interface{}, path []segment, value interface{}, valueSet *bool) (interface{}, *Error) {
 	var err *Error
 	var temp interface{}
 
 	final := len(path) == 0
 	if final {
+		*valueSet = true
 		return value, nil
 	}
 	seg := path[0]
@@ -125,7 +129,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			if seg.isRecursive && !slices.Contains(seg.keys, k) {
 				nextPath = path
 			}
-			temp, err = setNestedValues(obj[k], nextPath, value)
+			temp, err = setNestedValues(obj[k], nextPath, value, valueSet)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -137,25 +141,29 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 
 	case []interface{}:
 		var idxs []int
+		var idxsRec []int
 		if seg.isWildcard || seg.isRecursive {
 			idxs = makeRange(0, len(obj)-1)
-		} else {
-			if seg.isKey {
+		}
+		if !seg.isWildcard || seg.isRecursive {
+			if !seg.isRecursive && seg.isKey {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot set array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(seg.indexes, len(obj))
+			idxsRec, err = parseIndexes(seg.indexes, len(obj), true)
 			if err != nil {
 				return nil, err
 			}
-			obj = fillSlice(obj, idxs[len(idxs)-1])
+			if !seg.isRecursive {
+				idxs = idxsRec
+			}
 		}
 
 		for _, i := range idxs {
 			nextPath := path[1:]
-			if seg.isRecursive {
+			if seg.isRecursive && !slices.Contains(idxsRec, i) {
 				nextPath = path
 			}
-			temp, err = setNestedValues(obj[i], nextPath, value)
+			temp, err = setNestedValues(obj[i], nextPath, value, valueSet)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -171,24 +179,24 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			return nil, &Error{NotFound, fmt.Sprintf("cannot set using a wildcard on a non-existing path (%s)", fullKey)}
 		}
 		if seg.isRecursive {
-			return nil, &Error{RecursiveMiss, fmt.Sprintf("recursive path not found (%s)", fullKey)}
+			return nil, &Error{RecursiveMiss, fmt.Sprintf("path not found (%s)", fullKey)}
 		}
 		if seg.isIndex {
 			new := []interface{}{}
-			parsed, err := parseIndexes(seg.indexes, 0)
+			parsed, err := parseIndexes(seg.indexes, 0, false)
 			if err != nil {
 				return nil, err
 			}
 			new = fillSlice(new, parsed[len(parsed)-1])
 			for _, i := range parsed {
-				new[i], err = setNestedValues(nil, path[1:], value)
+				new[i], err = setNestedValues(nil, path[1:], value, valueSet)
 			}
 			return new, err
 
 		} else {
 			new := map[string]interface{}{}
 			for _, k := range seg.keys {
-				new[k], err = setNestedValues(nil, path[1:], value)
+				new[k], err = setNestedValues(nil, path[1:], value, valueSet)
 			}
 			return new, err
 		}
@@ -230,7 +238,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 			if seg.isRecursive {
 				nextPaths = append(nextPaths, path)
 			}
-			if !seg.isRecursive || slices.Contains(seg.keys, k) {
+			if !seg.isRecursive || seg.isWildcard || slices.Contains(seg.keys, k) {
 				nextPaths = append(nextPaths, path[1:])
 			}
 			for _, p := range nextPaths {
@@ -246,40 +254,47 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 
 	case []interface{}:
 		var idxs []int
+		var idxsRec []int
 		if seg.isWildcard || seg.isRecursive {
 			idxs = makeRange(0, len(obj)-1)
-		} else {
-			if seg.isKey {
+		}
+		if !seg.isWildcard || seg.isRecursive {
+			if !seg.isRecursive && seg.isKey {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot access array with a key (%s)", fullKey)}
 			}
-			idxs, err = parseIndexes(seg.indexes, len(obj))
+			idxsRec, err = parseIndexes(seg.indexes, len(obj), true)
 			if err != nil {
 				return nil, err
+			}
+			if !seg.isRecursive {
+				idxs = idxsRec
 			}
 		}
 
 		for _, i := range idxs {
-			if i >= len(obj) || i < 0 {
-				return nil, &Error{NotFound, fmt.Sprintf("index out of range (%s)", fullKey)}
-			}
-			nextPath := path[1:]
+			nextPaths := [][]segment{}
 			if seg.isRecursive {
-				nextPath = path
+				nextPaths = append(nextPaths, path)
 			}
-			temp, err = getNestedValues(obj[i], nextPath)
-			if err != nil && err.Code != RecursiveMiss {
-				return nil, err
+			if !seg.isRecursive || seg.isWildcard || slices.Contains(idxsRec, i) {
+				nextPaths = append(nextPaths, path[1:])
 			}
-			if err == nil || temp != nil {
-				result = append(result, temp...)
+			for _, p := range nextPaths {
+				temp, err = getNestedValues(obj[i], p)
+				if err != nil && err.Code != RecursiveMiss {
+					return nil, err
+				}
+				if err == nil || temp != nil {
+					result = append(result, temp...)
+				}
 			}
 		}
 
 	default:
 		if seg.isRecursive {
-			return nil, &Error{RecursiveMiss, fmt.Sprintf("recursive path not found (%s)", fullKey)}
+			return nil, &Error{RecursiveMiss, fmt.Sprintf("path not found (%s)", fullKey)}
 		}
-		return nil, &Error{NotFound, "path not found"}
+		return nil, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
 	}
 
 	return result, err
@@ -329,7 +344,7 @@ func Compile(path string) (*Compiled, error) {
 				return nil, &Error{InvalidPath, "missing closing bracket"}
 			}
 			inBracket = true
-			if i != 0 {
+			if i != 0 && key != ".." {
 				keyEnd = true
 			}
 		}
@@ -516,6 +531,9 @@ func parseKey(fullKey string) (segment, error) {
 			}
 			result.indexes = append(result.indexes, idx)
 			result.isMulti = true
+			if idx.start == idx.end {
+				return result, &Error{InvalidPath, fmt.Sprintf("invalid index range [%d:%d]", idx.start, idx.end)}
+			}
 		}
 	}
 
@@ -532,29 +550,35 @@ func parseKey(fullKey string) (segment, error) {
 		return result, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
 	}
 
-	if result.isRecursive {
-		return result, &Error{InvalidPath, "cannot use recursive search with indexes"}
-	}
-
 	return result, err
 }
 
-func parseIndexes(indexes []index, length int) ([]int, *Error) {
+func parseIndexes(indexes []index, length int, capLength bool) ([]int, *Error) {
+	var err *Error
 	temp := map[int]struct{}{}
 	parsed := []int{}
 	for _, idx := range indexes {
 		if !idx.hasStart && !idx.hasEnd {
-			idx := wrapIndex(idx.idx, length)
-			temp[idx] = struct{}{}
+			i, err := wrapIndex(idx.idx, length, capLength)
+			if err != nil {
+				return nil, err
+			}
+			temp[i] = struct{}{}
 			continue
 		}
 		var start int
 		var end int
 		if idx.hasStart {
-			start = wrapIndex(idx.start, length)
+			start, err = wrapIndex(idx.start, length, capLength)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if idx.hasEnd {
-			end = wrapIndex(idx.end, length) - 1
+			end, err = wrapIndex(idx.end-1, length, capLength)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			end = length - 1
 		}
@@ -563,7 +587,7 @@ func parseIndexes(indexes []index, length int) ([]int, *Error) {
 			continue
 		}
 		if start > end {
-			return parsed, &Error{InvalidPath, fmt.Sprintf("indexes out of range [%d:%d]", idx.start, idx.end)}
+			return parsed, &Error{NotFound, fmt.Sprintf("indexes out of range [%d:%d]", idx.start, idx.end)}
 		}
 		for _, i := range makeRange(start, end) {
 			temp[i] = struct{}{}
@@ -578,11 +602,15 @@ func parseIndexes(indexes []index, length int) ([]int, *Error) {
 	return parsed, nil
 }
 
-func wrapIndex(idx, length int) int {
-	if idx < 0 {
-		idx = length + idx
+func wrapIndex(idx, length int, capLength bool) (int, *Error) {
+	tmp := idx
+	if tmp < 0 {
+		tmp = length + tmp
 	}
-	return idx
+	if tmp < 0 || (capLength && tmp >= length) {
+		return tmp, &Error{NotFound, fmt.Sprintf("index out of range (%d)", idx)}
+	}
+	return tmp, nil
 }
 
 func makeRange(min, max int) []int {
