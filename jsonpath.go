@@ -129,14 +129,13 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
-			if temp != nil {
+			if err == nil || temp != nil {
 				obj[k] = temp
 			}
 		}
 		return obj, err
 
 	case []interface{}:
-
 		var idxs []int
 		if seg.isWildcard || seg.isRecursive {
 			idxs = makeRange(0, len(obj)-1)
@@ -160,7 +159,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}) (int
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
-			if temp != nil {
+			if err == nil || temp != nil {
 				obj[i] = temp
 			}
 		}
@@ -239,7 +238,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 				if err != nil && err.Code != RecursiveMiss {
 					return nil, err
 				}
-				if temp != nil {
+				if err == nil || temp != nil {
 					result = append(result, temp...)
 				}
 			}
@@ -271,7 +270,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
-			if temp != nil {
+			if err == nil || temp != nil {
 				result = append(result, temp...)
 			}
 		}

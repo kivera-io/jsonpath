@@ -62,7 +62,12 @@ var example = `
 		"'single'": "single",
 		"\"double\"": "double",
 		"  spaces  ": "spaces",
-		"][.,": "specials"
+		"][.,": "specials",
+		"null_value": null,
+		"empty_slice": [],
+		"empty_map": {},
+		"int": 123,
+		"float": 1.23
 	},
 	"key6": {
 		"recursive": "val1",
@@ -943,6 +948,16 @@ func TestGet(t *testing.T) {
 				wantErrMsg:  "path not found",
 			},
 			{
+				name: "empty-path",
+				args: args{
+					object: data,
+					path:   "",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "empty path",
+			},
+			{
 				name: "invalid-path-1",
 				args: args{
 					object: data,
@@ -1160,6 +1175,53 @@ func TestGet(t *testing.T) {
 					"val4",
 					"val5",
 				},
+				wantErr: false,
+			},
+		},
+		"other": {
+			{
+				name: "null-value",
+				args: args{
+					object: data,
+					path:   "$.key5.null_value",
+				},
+				want:    nil,
+				wantErr: false,
+			},
+			{
+				name: "empty-slice",
+				args: args{
+					object: data,
+					path:   "$.key5.empty_slice",
+				},
+				want:    []interface{}{},
+				wantErr: false,
+			},
+			{
+				name: "empty-map",
+				args: args{
+					object: data,
+					path:   "$.key5.empty_map",
+				},
+				want:    map[string]interface{}{},
+				wantErr: false,
+			},
+			{
+				name: "int",
+				args: args{
+					object: data,
+					path:   "$.key5.int",
+				},
+				want:    float64(123),
+				wantErr: false,
+			},
+			{
+				name: "float",
+				args: args{
+					object: data,
+					path:   "$.key5.float",
+				},
+				want:    float64(1.23),
 				wantErr: false,
 			},
 		},
