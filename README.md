@@ -5,16 +5,17 @@ A golang implementation of jsonpath notation that allows you to retrieve and upd
 ## Path Operators
 The following operators are available. All operators can be used to both set and get values.
 
-| Syntax | Description |
-| :------------: | :------------: |
-| `$.` | Root element. Can be ommitted. |
-| `.key` | Dot notation. Access a single key with a parent object. |
-| `[ key (, key) ]` | Bracket notation. Access one or more keys within a parent</br>object.  Single quoted ('key') and double quoted ("key")</br>strings can also be used within square brackets to access keys</br>with special characters. |
-| `[ n (, n) ]` | Access one or more indices in a parent array. Negative indices</br>are also allowed. |
-| `[ start:end ]` | Access a range of indicies in a parent array from the start index,</br>up to but not including the end index. This notation can also</br>be used alongside single index access. |
-| `[ n: ]` | Access a range of indicies in a parent array from the start index</br>until the end of the array. |
-| `[ :n ]` | Access a range of indicies in a parent array from the start of</br>the array, up to but not including the end index. |
-| `.*` *or* `[*]` | Access all elements in the parent object/array. |
+| Syntax | Description | Always Return Slice |
+| :------------: | :------------: | :------------: |
+| `$.` | Root element. Can be ommitted. | false |
+| `.key` | Dot notation. Recursively search the object for the specified key. | false |
+| `..key` | Rescursive descent. Search the object for all instances of the specified key. | true |
+| `[ key (, key) ]` | Bracket notation. Access one or more keys within a parent</br>object.  Single quoted ('key') and double quoted ("key")</br>strings can also be used within square brackets to access keys</br>with special characters. | conditional</br>(true for multiple keys)  |
+| `[ n (, n) ]` | Access one or more indices in a parent array. Negative indices</br>are also allowed. | conditional</br>(true for multiple indices) |
+| `[ start:end ]` | Access a range of indicies in a parent array from the start index,</br>up to but not including the end index. This notation can also</br>be used alongside single index access. | true |
+| `[ n: ]` | Access a range of indicies in a parent array from the start index</br>until the end of the array. | true |
+| `[ :n ]` | Access a range of indicies in a parent array from the start of</br>the array, up to but not including the end index. | true |
+| `.*` *or* `[*]` | Access all elements in the parent object/array. | true |
 
 ## Examples
 
@@ -23,6 +24,7 @@ The following operators are available. All operators can be used to both set and
 | `key1.key2.key3`  | Dot notation  |
 | `[key1][key2][key3]`  | Bracket notation  |
 | `key1[key2].key3`   | Combination of both dot and bracket notation |
+| `map..property`  | Access all nested keys in map with the name property |
 | `map['Key with spaces']`   | Access a map key with special characters  |
 | `array[0]`  | Access first element of array  |
 | `array[-1]`  | Access last element of array  |
