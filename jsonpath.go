@@ -344,7 +344,7 @@ func Compile(path string) (*Compiled, error) {
 				return nil, &Error{InvalidPath, "missing closing bracket"}
 			}
 			inBracket = true
-			if i != 0 && key != ".." {
+			if i != 0 && key != "." && key != ".." {
 				keyEnd = true
 			}
 		}
@@ -395,7 +395,6 @@ func Compile(path string) (*Compiled, error) {
 }
 
 // Parses path keys
-// func parseKey(fullKey string) ([]string, []index, bool, bool, bool, error) {
 func parseKey(fullKey string) (segment, error) {
 	var err error
 	result := segment{
@@ -531,7 +530,7 @@ func parseKey(fullKey string) (segment, error) {
 			}
 			result.indexes = append(result.indexes, idx)
 			result.isMulti = true
-			if idx.start == idx.end {
+			if idx.hasStart && idx.hasEnd && idx.start == idx.end {
 				return result, &Error{InvalidPath, fmt.Sprintf("invalid index range [%d:%d]", idx.start, idx.end)}
 			}
 		}

@@ -120,6 +120,417 @@ func getData() interface{} {
 	return data
 }
 
+func TestCompile(t *testing.T) {
+	type args struct {
+		path string
+	}
+	tests := map[string][]struct {
+		name         string
+		args         args
+		wantSegments int
+		wantErr      bool
+		wantErrCode  string
+		wantErrMsg   string
+	}{
+		"success": {
+			{
+				name: "base-1",
+				args: args{
+					path: "$",
+				},
+				wantSegments: 0,
+			},
+			{
+				name: "base-2",
+				args: args{
+					path: "$.",
+				},
+				wantSegments: 0,
+			},
+			{
+				name: "base-3",
+				args: args{
+					path: ".",
+				},
+				wantSegments: 0,
+			},
+			{
+				name: "dot-notation",
+				args: args{
+					path: ".key1.key2",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "bracket-notation",
+				args: args{
+					path: "$['key1']['key2']",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "mixed-notation-1",
+				args: args{
+					path: "$.key1['key2']",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "mixed-notation-2",
+				args: args{
+					path: "['key1'].key2",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "mixed-notation-3",
+				args: args{
+					path: "$.key1.['key2'].key3[\"key4\"]",
+				},
+				wantSegments: 4,
+			},
+			{
+				name: "mulit-keys",
+				args: args{
+					path: ".key1['key2','key3']",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "array-1",
+				args: args{
+					path: "[0,1,2]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "array-2",
+				args: args{
+					path: "[0,1,2]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "index-range-1",
+				args: args{
+					path: "[0:1]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "index-range-2",
+				args: args{
+					path: "[0:-1]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "index-range-3",
+				args: args{
+					path: "[0:]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "index-range-4",
+				args: args{
+					path: "[:-2]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "multi-index",
+				args: args{
+					path: "[0, 1:3, -5:, :10]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "wildcard-1",
+				args: args{
+					path: "$.*",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "wildcard-2",
+				args: args{
+					path: "$.[*]",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "wildcard-3",
+				args: args{
+					path: "$.key1.*.key2",
+				},
+				wantSegments: 3,
+			},
+			{
+				name: "wildcard-4",
+				args: args{
+					path: "$.key1.*[0]",
+				},
+				wantSegments: 3,
+			},
+			{
+				name: "recursive-1",
+				args: args{
+					path: "$..key1",
+				},
+				wantSegments: 1,
+			},
+			{
+				name: "recursive-2",
+				args: args{
+					path: "key1.key2..key3",
+				},
+				wantSegments: 3,
+			},
+			{
+				name: "recursive-3",
+				args: args{
+					path: "..key1[0:3]",
+				},
+				wantSegments: 2,
+			},
+			{
+				name: "complex-1",
+				args: args{
+					path: "$.key1[0, 1:5]..key2.*.[ 'key3' , \"key4\", '*'][*]",
+				},
+				wantSegments: 6,
+			},
+			{
+				name: "complex-2",
+				args: args{
+					path: "$..key1.*.*[-1]..key2[ 'key3', 'key4' ]..[0:10]",
+				},
+				wantSegments: 7,
+			},
+		},
+		"errors": {
+			{
+				name: "empty-path",
+				args: args{
+					path: "",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "empty path",
+			},
+			{
+				name: "invalid-whitespace-1",
+				args: args{
+					path: "key1. .key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
+			},
+			{
+				name: "invalid-whitespace-2",
+				args: args{
+					path: "key1.   key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
+			},
+			{
+				name: "invalid-whitespace-3",
+				args: args{
+					path: "$. []",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
+			},
+			{
+				name: "invalid-whitespace-4",
+				args: args{
+					path: "$.key1.key2.   ",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
+			},
+			{
+				name: "empty-bracket",
+				args: args{
+					path: "key1.key2[]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "empty path segment",
+			},
+			{
+				name: "missing-closing-bracket",
+				args: args{
+					path: "key1.key2['test'",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "missing closing bracket",
+			},
+			{
+				name: "missing-opening-bracket",
+				args: args{
+					path: "key1.key2[0]]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "missing opening bracket",
+			},
+			{
+				name: "missing-closing-quote-1",
+				args: args{
+					path: "key1.key2['test]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "missing closing quote",
+			},
+			{
+				name: "missing-closing-quote-2",
+				args: args{
+					path: "key1.key2['test'][']",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "missing closing quote",
+			},
+			{
+				name: "missing-closing-quote-3",
+				args: args{
+					path: "key1.key2['test\"][\\'\"]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "missing closing quote",
+			},
+			{
+				name: "quotes-outside-brackets",
+				args: args{
+					path: "key1.key2.'test'",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "cannot use quotes outside of brackets",
+			},
+			{
+				name: "end-with-separator-1",
+				args: args{
+					path: "key1.key2.key3.",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "path cannot end with '.' separator",
+			},
+			{
+				name: "end-with-separator-2",
+				args: args{
+					path: "key1.key2.key3[0].",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "path cannot end with '.' separator",
+			},
+			{
+				name: "invalid-recursive-1",
+				args: args{
+					path: "key1...key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-recursive-2",
+				args: args{
+					path: "... ..key2",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-recursive-3",
+				args: args{
+					path: "key1.key2..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-recursive-4",
+				args: args{
+					path: "..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-recursive-5",
+				args: args{
+					path: "$..",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid recursive path",
+			},
+			{
+				name: "invalid-index-range-1",
+				args: args{
+					path: "$.test[1:1]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid index range",
+			},
+			{
+				name: "invalid-index-range-2",
+				args: args{
+					path: "$.test[ 0, 1, 2:2]",
+				},
+				wantErr:     true,
+				wantErrCode: InvalidPath,
+				wantErrMsg:  "invalid index range",
+			},
+		},
+	}
+	for groupName, group := range tests {
+		for _, tt := range group {
+			testName := fmt.Sprintf("%s-%s", groupName, tt.name)
+			if runTest != "" && testName != runTest {
+				continue
+			}
+			t.Run(testName, func(t *testing.T) {
+				got, err := Compile(tt.args.path)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("Get() error = %v, wantErr %v", err, tt.wantErr)
+					return
+				}
+				if tt.wantErr {
+					if err.(*Error).Code != tt.wantErrCode {
+						t.Errorf("Get() errCode = %v, wantCode %v", err.(*Error).Code, tt.wantErrCode)
+					}
+					if !strings.Contains(err.Error(), tt.wantErrMsg) {
+						t.Errorf("Get() errMsg = %v, wantMsg %v", err.(*Error).Msg, tt.wantErrMsg)
+					}
+					return
+				}
+
+				if len(got.segments) != tt.wantSegments {
+					t.Errorf("Segments = %v, want %v", len(got.segments), tt.wantSegments)
+				}
+			})
+		}
+	}
+}
+
 func TestGet(t *testing.T) {
 	data := getData()
 
@@ -1006,196 +1417,6 @@ func TestGet(t *testing.T) {
 				wantErrCode: NotFound,
 				wantErrMsg:  "path not found",
 			},
-			{
-				name: "empty-path",
-				args: args{
-					object: data,
-					path:   "",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "empty path",
-			},
-			{
-				name: "invalid-path-1",
-				args: args{
-					object: data,
-					path:   "key1. .key2",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
-			},
-			{
-				name: "invalid-path-2",
-				args: args{
-					object: data,
-					path:   "key1.key2[]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "empty path segment",
-			},
-			{
-				name: "invalid-path-3",
-				args: args{
-					object: data,
-					path:   "key1.key2['test'",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "missing closing bracket",
-			},
-			{
-				name: "invalid-path-4",
-				args: args{
-					object: data,
-					path:   "key1.key2[0]]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "missing opening bracket",
-			},
-			{
-				name: "invalid-path-5",
-				args: args{
-					object: data,
-					path:   "key1.key2['test]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "missing closing quote",
-			},
-			{
-				name: "invalid-path-6",
-				args: args{
-					object: data,
-					path:   "key1.key2['test'][']",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "missing closing quote",
-			},
-			{
-				name: "invalid-path-7",
-				args: args{
-					object: data,
-					path:   "key1.key2['test\"][\\'\"]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "missing closing quote",
-			},
-			{
-				name: "invalid-path-8",
-				args: args{
-					object: data,
-					path:   "key1.key2.'test'",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "cannot use quotes outside of brackets",
-			},
-			{
-				name: "invalid-path-9",
-				args: args{
-					object: data,
-					path:   "key1.key2.key3.",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "path cannot end with '.' separator",
-			},
-			{
-				name: "invalid-path-10",
-				args: args{
-					object: data,
-					path:   "key1.key2.key3[0].",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "path cannot end with '.' separator",
-			},
-			{
-				name: "invalid-path-11",
-				args: args{
-					object: data,
-					path:   "key1.  key2",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "cannot use whitespace characters outside quotes and brackets",
-			},
-			{
-				name: "invalid-path-12",
-				args: args{
-					object: data,
-					path:   "key1...key2",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid recursive path",
-			},
-			{
-				name: "invalid-path-13",
-				args: args{
-					object: data,
-					path:   "... ..key2",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid recursive path",
-			},
-			{
-				name: "invalid-path-14",
-				args: args{
-					object: data,
-					path:   "key1.key2..",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid recursive path",
-			},
-			{
-				name: "invalid-path-15",
-				args: args{
-					object: data,
-					path:   "..",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid recursive path",
-			},
-			{
-				name: "invalid-path-16",
-				args: args{
-					object: data,
-					path:   "$..",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid recursive path",
-			},
-			{
-				name: "invalid-path-16",
-				args: args{
-					object: data,
-					path:   "$.test[1:1]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid index range",
-			},
-			{
-				name: "invalid-path-17",
-				args: args{
-					object: data,
-					path:   "$.test[ 0, 1, 2:2]",
-				},
-				wantErr:     true,
-				wantErrCode: InvalidPath,
-				wantErrMsg:  "invalid index range",
-			},
 		},
 		"multi-method": {
 			{
@@ -1351,7 +1572,6 @@ func TestGet(t *testing.T) {
 			})
 		}
 	}
-
 }
 
 func TestSet(t *testing.T) {
