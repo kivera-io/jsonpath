@@ -37,6 +37,7 @@ func main() {
 	flag.StringVar(&file, "file", "", "A JSON file to process")
 	flag.StringVar(&set, "set", "", "A value to set using the query")
 	indent := flag.Int("indent", 0, "Indentation to use when printing the result")
+	strict := flag.Bool("strict", false, "Only allow setting values on existing paths")
 	flag.Parse()
 
 	args := flag.Args()
@@ -83,6 +84,9 @@ func main() {
 	c, err := jsonpath.Compile(query)
 	if err != nil {
 		quit(err)
+	}
+	if *strict {
+		c.SetStrict()
 	}
 
 	var result interface{}

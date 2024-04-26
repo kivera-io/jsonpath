@@ -13,9 +13,16 @@ import (
 var rangeRegex = regexp.MustCompile(`^(-?\d+)?:(-?\d+)?$`)
 
 type Compiled struct {
-	raw      string
-	segments []segment
-	hasMulti bool
+	raw          string
+	segments     []segment
+	hasMulti     bool
+
+	// only allow setting values on existing paths
+	strictPaths  bool
+	// only allow updating existing keys in maps
+	strictMaps   bool
+	// only allow updating existing indicies in slices
+	strictSlices bool
 }
 
 type segment struct {
@@ -52,9 +59,45 @@ const (
 	RecursiveMiss = "recursive_miss"
 )
 
+func (c *Compiled) SetStrict() {
+	c.strictPaths = true
+	c.strictMaps = true
+	c.strictSlices = true
+}
+
+func (c *Compiled) SetStrictPaths() {
+	c.strictPaths = true
+}
+
+func (c *Compiled) SetStrictMaps() {
+	c.SetStrictPaths()
+	c.strictMaps = true
+}
+
+func (c *Compiled) SetStrictSlices() {
+	c.SetStrictPaths()
+	c.strictSlices = true
+}
+
+func SetStrict(c *Compiled) {
+	c.SetStrict()
+}
+
+func SetStrictPaths(c *Compiled) {
+	c.SetStrictPaths()
+}
+
+func SetStrictMaps(c *Compiled) {
+	c.SetStrictMaps()
+}
+
+func SetStrictSlices(c *Compiled) {
+	c.SetStrictMaps()
+}
+
 func (c *Compiled) Set(object interface{}, value interface{}) error {
 	var valueSet bool
-	_, err := setNestedValues(object, c.segments, value, &valueSet)
+	_, err := c.setNestedValues(object, c.segments, value, &valueSet)
 	if err != nil {
 		if err.Code != RecursiveMiss {
 			return err
@@ -67,7 +110,7 @@ func (c *Compiled) Set(object interface{}, value interface{}) error {
 }
 
 func (c *Compiled) Get(object interface{}) (interface{}, error) {
-	value, err := getNestedValues(object, c.segments)
+	value, err := c.getNestedValues(object, c.segments)
 	if err != nil {
 		if err.Code != RecursiveMiss {
 			return nil, err
@@ -98,7 +141,7 @@ func Get(object interface{}, path string) (interface{}, error) {
 	return compiled.Get(object)
 }
 
-func setNestedValues(object interface{}, path []segment, value interface{}, valueSet *bool) (interface{}, *Error) {
+func (c *Compiled) setNestedValues(object interface{}, path []segment, value interface{}, valueSet *bool) (interface{}, *Error) {
 	var err *Error
 	var temp interface{}
 
@@ -125,11 +168,14 @@ func setNestedValues(object interface{}, path []segment, value interface{}, valu
 		}
 
 		for _, k := range keys {
+			if _, ok := obj[k]; c.strictMaps && !ok {
+				return nil, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
+			}
 			nextPath := path[1:]
 			if seg.isRecursive && !slices.Contains(seg.keys, k) {
 				nextPath = path
 			}
-			temp, err = setNestedValues(obj[k], nextPath, value, valueSet)
+			temp, err = c.setNestedValues(obj[k], nextPath, value, valueSet)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -149,12 +195,13 @@ func setNestedValues(object interface{}, path []segment, value interface{}, valu
 			if !seg.isRecursive && seg.isKey {
 				return nil, &Error{NotFound, fmt.Sprintf("cannot set array with a key (%s)", fullKey)}
 			}
-			idxsRec, err = parseIndexes(seg.indexes, len(obj), true)
+			idxsRec, err = parseIndexes(seg.indexes, len(obj), c.strictSlices)
 			if err != nil {
 				return nil, err
 			}
 			if !seg.isRecursive {
 				idxs = idxsRec
+				obj = fillSlice(obj, idxs[len(idxs)-1])
 			}
 		}
 
@@ -163,7 +210,7 @@ func setNestedValues(object interface{}, path []segment, value interface{}, valu
 			if seg.isRecursive && !slices.Contains(idxsRec, i) {
 				nextPath = path
 			}
-			temp, err = setNestedValues(obj[i], nextPath, value, valueSet)
+			temp, err = c.setNestedValues(obj[i], nextPath, value, valueSet)
 			if err != nil && err.Code != RecursiveMiss {
 				return nil, err
 			}
@@ -175,11 +222,11 @@ func setNestedValues(object interface{}, path []segment, value interface{}, valu
 		return obj, err
 
 	default:
-		if seg.isWildcard {
-			return nil, &Error{NotFound, fmt.Sprintf("cannot set using a wildcard on a non-existing path (%s)", fullKey)}
-		}
 		if seg.isRecursive {
 			return nil, &Error{RecursiveMiss, fmt.Sprintf("path not found (%s)", fullKey)}
+		}
+		if c.strictPaths || seg.isWildcard {
+			return nil, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
 		}
 		if seg.isIndex {
 			new := []interface{}{}
@@ -189,21 +236,21 @@ func setNestedValues(object interface{}, path []segment, value interface{}, valu
 			}
 			new = fillSlice(new, parsed[len(parsed)-1])
 			for _, i := range parsed {
-				new[i], err = setNestedValues(nil, path[1:], value, valueSet)
+				new[i], err = c.setNestedValues(nil, path[1:], value, valueSet)
 			}
 			return new, err
 
 		} else {
 			new := map[string]interface{}{}
 			for _, k := range seg.keys {
-				new[k], err = setNestedValues(nil, path[1:], value, valueSet)
+				new[k], err = c.setNestedValues(nil, path[1:], value, valueSet)
 			}
 			return new, err
 		}
 	}
 }
 
-func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error) {
+func (c *Compiled) getNestedValues(object interface{}, path []segment) ([]interface{}, *Error) {
 	var err *Error
 	var temp []interface{}
 
@@ -242,7 +289,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 				nextPaths = append(nextPaths, path[1:])
 			}
 			for _, p := range nextPaths {
-				temp, err = getNestedValues(obj[k], p)
+				temp, err = c.getNestedValues(obj[k], p)
 				if err != nil && err.Code != RecursiveMiss {
 					return nil, err
 				}
@@ -280,7 +327,7 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 				nextPaths = append(nextPaths, path[1:])
 			}
 			for _, p := range nextPaths {
-				temp, err = getNestedValues(obj[i], p)
+				temp, err = c.getNestedValues(obj[i], p)
 				if err != nil && err.Code != RecursiveMiss {
 					return nil, err
 				}
@@ -300,11 +347,16 @@ func getNestedValues(object interface{}, path []segment) ([]interface{}, *Error)
 	return result, err
 }
 
-func Compile(path string) (*Compiled, error) {
+func Compile(path string, options ...func(*Compiled)) (*Compiled, error) {
 	compiled := Compiled{
 		raw:      path,
 		segments: []segment{},
 	}
+
+	for _, option := range options {
+		option(&compiled)
+	}
+
 	var key string
 	var keyEnd bool
 	var inBracket bool

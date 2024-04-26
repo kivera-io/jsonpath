@@ -1588,6 +1588,7 @@ func TestSet(t *testing.T) {
 		wantErr     bool
 		wantErrCode string
 		wantErrMsg  string
+		strictMode  bool
 	}{
 		"map-set": {
 			{
@@ -1716,6 +1717,59 @@ func TestSet(t *testing.T) {
 				},
 				wantErr: false,
 			},
+			{
+				name: "add-slice-range-1",
+				args: args{
+					object: getData(),
+					path:   "key3.array[6]",
+					value:  "val",
+				},
+				want: func() interface{} {
+					expected := getData()
+					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
+					slice = fillSlice(slice, 6)
+					slice[6] = "val"
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = slice
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "add-slice-range-2",
+				args: args{
+					object: getData(),
+					path:   "key3.array[10]",
+					value:  "val",
+				},
+				want: func() interface{} {
+					expected := getData()
+					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
+					slice = fillSlice(slice, 10)
+					slice[10] = "val"
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = slice
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "add-slice-range-3",
+				args: args{
+					object: getData(),
+					path:   "key3.array[0:8]",
+					value:  "val",
+				},
+				want: func() interface{} {
+					expected := getData()
+					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
+					slice = fillSlice(slice, 7)
+					for i := range slice {
+						slice[i] = "val"
+					}
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = slice
+					return expected
+				}(),
+				wantErr: false,
+			},
 		},
 		"object-set": {
 			{
@@ -1784,7 +1838,6 @@ func TestSet(t *testing.T) {
 			},
 		},
 		"update": {
-
 			{
 				name: "map-1",
 				args: args{
@@ -1840,6 +1893,66 @@ func TestSet(t *testing.T) {
 					return expected
 				}(),
 				wantErr: false,
+			},
+			{
+				name: "strict-map-1",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key1"].(map[string]interface{})["key2"].(map[string]interface{})["key3"].(map[string]interface{})["key4"].(map[string]interface{})["key5"] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-array-1",
+				args: args{
+					object: getData(),
+					path:   "key2.array[0]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-array-2",
+				args: args{
+					object: getData(),
+					path:   "key2.array[0].subkey",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[0].(map[string]interface{})["subkey"] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-array-3",
+				args: args{
+					object: getData(),
+					path:   "key2.array[-1]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key2"].(map[string]interface{})["array"].([]interface{})[2] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
 			},
 		},
 		"multi-set": {
@@ -1953,7 +2066,6 @@ func TestSet(t *testing.T) {
 			},
 		},
 		"range-set": {
-
 			{
 				name: "array-1",
 				args: args{
@@ -2042,6 +2154,59 @@ func TestSet(t *testing.T) {
 				}(),
 				wantErr: false,
 			},
+			{
+				name: "strict-array",
+				args: args{
+					object: getData(),
+					path:   "key3.array.*",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = []interface{}{
+						"test", "test", "test", "test", "test", "test",
+					}
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-map",
+				args: args{
+					object: getData(),
+					path:   "key3.map.*",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key3"].(map[string]interface{})["map"] = map[string]interface{}{
+						"key1": "test",
+						"key2": "test",
+						"key3": "test",
+					}
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-nested-objects",
+				args: args{
+					object: getData(),
+					path:   "key4.*.key1",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key4"].([]interface{})[0].(map[string]interface{})["key1"] = "test"
+					expected.(map[string]interface{})["key4"].([]interface{})[1].(map[string]interface{})["key1"] = "test"
+					expected.(map[string]interface{})["key4"].([]interface{})[2].(map[string]interface{})["key1"] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
 		},
 		"errors": {
 			{
@@ -2119,7 +2284,7 @@ func TestSet(t *testing.T) {
 				},
 				wantErr:     true,
 				wantErrCode: NotFound,
-				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+				wantErrMsg:  "path not found",
 			},
 			{
 				name: "incorrect-access-type-8",
@@ -2130,7 +2295,7 @@ func TestSet(t *testing.T) {
 				},
 				wantErr:     true,
 				wantErrCode: NotFound,
-				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+				wantErrMsg:  "path not found",
 			},
 			{
 				name: "incorrect-access-type-9",
@@ -2141,7 +2306,7 @@ func TestSet(t *testing.T) {
 				},
 				wantErr:     true,
 				wantErrCode: NotFound,
-				wantErrMsg:  "cannot set using a wildcard on a non-existing path",
+				wantErrMsg:  "path not found",
 			},
 			{
 				name: "incorrect-access-type-10",
@@ -2153,6 +2318,90 @@ func TestSet(t *testing.T) {
 				wantErr:     true,
 				wantErrCode: NotFound,
 				wantErrMsg:  "path not found",
+			},
+			{
+				name: "strict-index-out-of-range-1",
+				args: args{
+					object: getData(),
+					path:   "key3.array[6]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+				strictMode:  true,
+			},
+			{
+				name: "strict-index-out-of-range-2",
+				args: args{
+					object: getData(),
+					path:   "key3.array[0,1,2,3,4,5,6]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+				strictMode:  true,
+			},
+			{
+				name: "strict-index-out-of-range-3",
+				args: args{
+					object: getData(),
+					path:   "key3.array[0:10]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+				strictMode:  true,
+			},
+			{
+				name: "strict-key-not-found-1",
+				args: args{
+					object: getData(),
+					path:   ".missing",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "key does not exist",
+				strictMode:  true,
+			},
+			{
+				name: "strict-key-not-found-2",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.missing",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "key does not exist",
+				strictMode:  true,
+			},
+			{
+				name: "strict-key-not-found-3",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key6",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "key does not exist",
+				strictMode:  true,
+			},
+			{
+				name: "strict-key-not-found-4",
+				args: args{
+					object: getData(),
+					path:   "key1.key2.key3.key4.key5.key6",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "path not found",
+				strictMode:  true,
 			},
 		},
 		"recursive-set": {
@@ -2188,6 +2437,41 @@ func TestSet(t *testing.T) {
 					return expected
 				}(),
 				wantErr: false,
+			},
+			{
+				name: "strict-map-1",
+				args: args{
+					object: getData(),
+					path:   "key6..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key8"].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-map-2",
+				args: args{
+					object: getData(),
+					path:   "key6['key7'].key9..recursive",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
+					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
 			},
 			{
 				name: "map-3",
@@ -2265,6 +2549,40 @@ func TestSet(t *testing.T) {
 				wantErr: false,
 			},
 			{
+				name: "strict-slice-1",
+				args: args{
+					object: getData(),
+					path:   "key7.arrays..[0]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["a"].([]interface{})[0] = "test"
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["b"].([]interface{})[0] = "test"
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["c"].([]interface{})[0] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
+				name: "strict-slice-2",
+				args: args{
+					object: getData(),
+					path:   "key7.arrays..[1]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					expected := getData()
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["a"].([]interface{})[1] = "test"
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["b"].([]interface{})[1] = "test"
+					expected.(map[string]interface{})["key7"].(map[string]interface{})["arrays"].(map[string]interface{})["c"].([]interface{})[1] = "test"
+					return expected
+				}(),
+				wantErr:    false,
+				strictMode: true,
+			},
+			{
 				name: "slice-3",
 				args: args{
 					object: getData(),
@@ -2311,7 +2629,15 @@ func TestSet(t *testing.T) {
 				continue
 			}
 			t.Run(testName, func(t *testing.T) {
-				err := Set(tt.args.object, tt.args.path, tt.args.value)
+				c, err := Compile(tt.args.path)
+				if err != nil {
+					t.Errorf("Compile() error = %v", err)
+					return
+				}
+				if tt.strictMode {
+					c.SetStrict()
+				}
+				err = c.Set(tt.args.object, tt.args.value)
 				if (err != nil) != tt.wantErr {
 					t.Errorf("Set() error = %v, wantErr %v", err, tt.wantErr)
 					return
