@@ -15,7 +15,8 @@ func quit(e error) {
 	if e == nil {
 		os.Exit(0)
 	}
-	fmt.Println(e)
+	flag.Usage()
+	fmt.Println("\nerror:", e)
 	os.Exit(1)
 }
 

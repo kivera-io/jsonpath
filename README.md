@@ -5,7 +5,7 @@ A golang implementation of jsonpath notation that allows you to retrieve and upd
 ## Path Operators
 The following operators are available. All operators can be used to both set and get values.
 
-| Syntax | Description | Always Return Slice |
+| Syntax | Description | Always Return Interface Slice |
 | :------------: | :------------: | :------------: |
 | `$.` | Root element. Can be ommitted. | false |
 | `.key` | Dot notation. Recursively search the object for the specified key. | false |
@@ -16,6 +16,8 @@ The following operators are available. All operators can be used to both set and
 | `[ :n ]` | Access a range of indicies in a parent array from the start of</br>the array, up to but not including the end index. | true |
 | `..key` | Rescursive descent. Search for all instances of the specified</br>keys/indices. Works with multiple keys, indices and ranges. | true |
 | `.*` *or* `[*]` | Access all elements in the parent object/array. | true |
+
+*** Note: any query that could return multiple results will always return a slice of interfaces ([]interface{}). ***
 
 ## Examples
 

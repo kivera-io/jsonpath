@@ -12,6 +12,13 @@ import (
 
 var runTest = os.Getenv("TEST_NAME")
 
+func fillInterfaceSlice(slice []interface{}, max int) []interface{} {
+	for i := len(slice); i <= max; i++ {
+		slice = append(slice, nil)
+	}
+	return slice
+}
+
 var example = `
 {
 	"key1": {
@@ -110,6 +117,52 @@ var example = `
 		}
 	}
 }`
+
+var val1 = "val1"
+var val2 = "val2"
+var val3 = "val3"
+var newVal = "new"
+
+var structuredData1 = map[string]map[string][]int{
+	"key1": {
+		"key2": {
+			1,
+			2,
+			3,
+		},
+		"key3": {
+			4,
+			5,
+			6,
+		},
+	},
+}
+
+var structuredData2 = map[string]map[string]*string{
+	"key1": {
+		"subkey": &val1,
+	},
+	"key2": {
+		"subkey": &val2,
+	},
+	"key3": {
+		"subkey": &val3,
+	},
+}
+
+var structuredData3 = map[string][]map[string]*string{
+	"key1": {
+		{
+			"subkey": &val1,
+		},
+		{
+			"diff": &val2,
+		},
+		{
+			"subkey": &val3,
+		},
+	},
+}
 
 func getData() interface{} {
 	var data interface{}
@@ -1528,6 +1581,93 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 		},
+		"reflection": {
+			{
+				name: "simple-array-access-1",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1.key2[0]",
+				},
+				want:    1,
+				wantErr: false,
+			},
+			{
+				name: "simple-array-access-2",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1.key2[-1]",
+				},
+				want:    3,
+				wantErr: false,
+			},
+			{
+				name: "simple-index-range-access",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1.key2[1:]",
+				},
+				want: []interface{}{
+					2,
+					3,
+				},
+				wantErr: false,
+			},
+			{
+				name: "simple-object-access-1",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1.key2",
+				},
+				want: []int{
+					1,
+					2,
+					3,
+				},
+				wantErr: false,
+			},
+			{
+				name: "simple-object-access-2",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1.key3",
+				},
+				want: []int{
+					4,
+					5,
+					6,
+				},
+				wantErr: false,
+			},
+			{
+				name: "simple-object-access",
+				args: args{
+					object: structuredData1,
+					path:   "$.key1",
+				},
+				want: map[string][]int{
+					"key2": {
+						1,
+						2,
+						3,
+					},
+					"key3": {
+						4,
+						5,
+						6,
+					},
+				},
+				wantErr: false,
+			},
+			{
+				name: "get-pointer",
+				args: args{
+					object: structuredData2,
+					path:   "$.key1.subkey",
+				},
+				want:    &val1,
+				wantErr: false,
+			},
+		},
 	}
 	for groupName, group := range tests {
 		for _, tt := range group {
@@ -1727,7 +1867,7 @@ func TestSet(t *testing.T) {
 				want: func() interface{} {
 					expected := getData()
 					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
-					slice = fillSlice(slice, 6)
+					slice = fillInterfaceSlice(slice, 6)
 					slice[6] = "val"
 					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = slice
 					return expected
@@ -1744,7 +1884,7 @@ func TestSet(t *testing.T) {
 				want: func() interface{} {
 					expected := getData()
 					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
-					slice = fillSlice(slice, 10)
+					slice = fillInterfaceSlice(slice, 10)
 					slice[10] = "val"
 					expected.(map[string]interface{})["key3"].(map[string]interface{})["array"] = slice
 					return expected
@@ -1761,7 +1901,7 @@ func TestSet(t *testing.T) {
 				want: func() interface{} {
 					expected := getData()
 					slice := expected.(map[string]interface{})["key3"].(map[string]interface{})["array"].([]interface{})
-					slice = fillSlice(slice, 7)
+					slice = fillInterfaceSlice(slice, 7)
 					for i := range slice {
 						slice[i] = "val"
 					}
@@ -2403,6 +2543,61 @@ func TestSet(t *testing.T) {
 				wantErrMsg:  "path not found",
 				strictMode:  true,
 			},
+			{
+				name: "refelction-invalid-type-1",
+				args: args{
+					object: structuredData1,
+					path:   "key1.key2[0]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot assign type",
+			},
+			{
+				name: "refelction-invalid-type-2",
+				args: args{
+					object: structuredData1,
+					path:   "key1.key2[0]",
+					value:  &newVal,
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot assign type",
+			},
+			{
+				name: "refelction-invalid-type-3",
+				args: args{
+					object: structuredData1,
+					path:   "key1.key2",
+					value:  map[string]string{},
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot assign type",
+			},
+			{
+				name: "refelction-invalid-type-4",
+				args: args{
+					object: structuredData2,
+					path:   "*.subkey",
+					value:  newVal,
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot assign type",
+			},
+			{
+				name: "refelction-invalid-type-5",
+				args: args{
+					object: structuredData3,
+					path:   "key1[*].subkey",
+					value:  newVal,
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "cannot assign type",
+			},
 		},
 		"recursive-set": {
 			{
@@ -2616,6 +2811,144 @@ func TestSet(t *testing.T) {
 					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[0].(map[string]interface{})["recursive"] = "test"
 					expected.(map[string]interface{})["key6"].(map[string]interface{})["key7"].(map[string]interface{})["key9"].([]interface{})[1].(map[string]interface{})["recursive"] = "test"
 					return expected
+				}(),
+				wantErr: false,
+			},
+		},
+		"reflection": {
+			{
+				name: "simple-set-1",
+				args: args{
+					object: structuredData1,
+					path:   "key1.key2[0]",
+					value:  99,
+				},
+				want: func() interface{} {
+					expected := structuredData1
+					expected["key1"]["key2"][0] = 99
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "simple-set-2",
+				args: args{
+					object: structuredData1,
+					path:   "key1.key2",
+					value:  []int{4, 5, 6},
+				},
+				want: func() interface{} {
+					expected := structuredData1
+					expected["key1"]["key2"] = []int{4, 5, 6}
+					return expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "simple-set-3",
+				args: args{
+					object: &structuredData2,
+					path:   "key1.subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData2
+					expected["key1"]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "range-set-1",
+				args: args{
+					object: &structuredData3,
+					path:   ".key1[0:].subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData3
+					expected["key1"][0]["subkey"] = &newVal
+					expected["key1"][1]["subkey"] = &newVal
+					expected["key1"][2]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "index-set-1",
+				args: args{
+					object: &structuredData3,
+					path:   ".key1[0,2].subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData3
+					expected["key1"][0]["subkey"] = &newVal
+					expected["key1"][2]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "wildcard-set-1",
+				args: args{
+					object: &structuredData2,
+					path:   "*.subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData2
+					expected["key1"]["subkey"] = &newVal
+					expected["key2"]["subkey"] = &newVal
+					expected["key3"]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "recursive-set-1",
+				args: args{
+					object: &structuredData2,
+					path:   "..subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData2
+					expected["key1"]["subkey"] = &newVal
+					expected["key2"]["subkey"] = &newVal
+					expected["key3"]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "wildcard-set-2",
+				args: args{
+					object: &structuredData3,
+					path:   "key1[*].subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData3
+					expected["key1"][0]["subkey"] = &newVal
+					expected["key1"][1]["subkey"] = &newVal
+					expected["key1"][2]["subkey"] = &newVal
+					return &expected
+				}(),
+				wantErr: false,
+			},
+			{
+				name: "recursive-set-2",
+				args: args{
+					object: &structuredData3,
+					path:   "..subkey",
+					value:  &newVal,
+				},
+				want: func() interface{} {
+					expected := structuredData3
+					expected["key1"][0]["subkey"] = &newVal
+					expected["key1"][2]["subkey"] = &newVal
+					return &expected
 				}(),
 				wantErr: false,
 			},
