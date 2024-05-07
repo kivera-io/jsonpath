@@ -3,7 +3,7 @@ SHELL=/bin/bash
 .EXPORT_ALL_VARIABLES:
 
 test:
-	go test . -v
+	go test .
 
 build:
 	go build ./cmd/jsonpath/
