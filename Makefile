@@ -4,3 +4,6 @@ SHELL=/bin/bash
 
 test:
 	go test . -v
+
+build:
+	go build ./cmd/jsonpath/

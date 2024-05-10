@@ -2,7 +2,9 @@ package jsonpath
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,15 +16,25 @@ var rangeRegex = regexp.MustCompile(`^(-?\d+)?:(-?\d+)?$`)
 type Compiled struct {
 	raw      string
 	segments []segment
+	hasMulti bool
+
+	// only allow setting values on existing paths
+	strictPaths bool
+	// query struct based off a tag instead of field names
+	structTag    string
+	structTagSet bool
 }
 
 type segment struct {
-	raw        string
-	keys       []string
-	indexes    []index
-	isKey      bool
-	isIndex    bool
-	isWildcard bool
+	raw         string
+	keys        []string
+	keysRefl    []reflect.Value
+	indexes     []index
+	isKey       bool
+	isIndex     bool
+	isWildcard  bool
+	isRecursive bool
+	isMulti     bool
 }
 
 type index struct {
@@ -43,225 +55,500 @@ func (e *Error) Error() string {
 }
 
 const (
-	NotFound    = "not_found"
-	InvalidPath = "invalid_path"
+	NotFound      = "not_found"
+	InvalidPath   = "invalid_path"
+	RecursiveMiss = "recursive_miss"
 )
 
-func Compile(path string) (*Compiled, error) {
-	segments, err := parsePath(path)
-	if err != nil {
-		return nil, err
+func (c *Compiled) EnableStrictPaths() {
+	c.strictPaths = true
+}
+
+func (c *Compiled) UseStructTag(tag string) {
+	c.structTag = tag
+	c.structTagSet = true
+}
+
+func EnableStrictPaths() func(c *Compiled) {
+	return func(c *Compiled) {
+		c.EnableStrictPaths()
 	}
-	return &Compiled{
-		raw:      path,
-		segments: segments,
-	}, nil
+}
+
+func UseStructTag(tag string) func(c *Compiled) {
+	return func(c *Compiled) {
+		c.UseStructTag(tag)
+	}
 }
 
 func (c *Compiled) Set(object interface{}, value interface{}) error {
-	_, err := setNestedValues(object, c.segments, value)
+	var valueSet bool
+	_, err := c.setNestedValues(reflect.ValueOf(object), nil, c.segments, value, &valueSet)
 	if err != nil {
-		return err
+		if err.Code != RecursiveMiss {
+			return err
+		}
+		if !valueSet {
+			return &Error{NotFound, err.Msg}
+		}
 	}
 	return nil
 }
 
 func (c *Compiled) Get(object interface{}) (interface{}, error) {
-	value, err := getNestedValues(object, c.segments)
+	value, err := c.getNestedValues(reflect.ValueOf(object), c.segments)
 	if err != nil {
-		return nil, err
-
+		if err.Code != RecursiveMiss {
+			return nil, err
+		}
+		if len(value) == 0 {
+			return nil, &Error{NotFound, "path not found"}
+		}
+	}
+	if !c.hasMulti && len(value) == 1 {
+		return value[0], nil
 	}
 	return value, nil
 }
 
-func Set(object interface{}, path string, value interface{}) error {
-	segments, err := parsePath(path)
+func Set(object interface{}, path string, value interface{}, options ...func(*Compiled)) error {
+	compiled, err := Compile(path, options...)
 	if err != nil {
 		return err
 	}
-	_, err = setNestedValues(object, segments, value)
-	if err != nil {
-		return err
-	}
-	return nil
+	return compiled.Set(object, value)
 }
 
-func Get(object interface{}, path string) (interface{}, error) {
-	segments, err := parsePath(path)
+func Get(object interface{}, path string, options ...func(*Compiled)) (interface{}, error) {
+	compiled, err := Compile(path, options...)
 	if err != nil {
 		return nil, err
 	}
-	value, err := getNestedValues(object, segments)
-	if err != nil {
-		return nil, err
-
-	}
-	return value, nil
+	return compiled.Get(object)
 }
 
-func setNestedValues(object interface{}, path []segment, value interface{}) (interface{}, error) {
-	var err error
+func (c *Compiled) setNestedValues(object reflect.Value, objectType reflect.Type, path []segment, value interface{}, valueSet *bool) (reflect.Value, *Error) {
+	var err *Error
+	var temp reflect.Value
+
 	final := len(path) == 0
 	if final {
-		return value, nil
+		*valueSet = true
+		return reflect.ValueOf(value), nil
 	}
-	segment := path[0]
-	fullKey := segment.raw
+	seg := path[0]
+	fullKey := seg.raw
 
-	switch obj := object.(type) {
-	case map[string]interface{}:
-		keys := []string{}
-		if segment.isWildcard {
-			for k := range obj {
-				keys = append(keys, k)
+	if !object.IsValid() && objectType != nil {
+		object = initNewValue(objectType).Elem()
+	}
+
+	var derefenced bool
+	objectRef := object
+	for objectRef.Kind() == reflect.Ptr || objectRef.Kind() == reflect.Interface {
+		if objectRef.Kind() == reflect.Ptr {
+			derefenced = true
+			if objectRef.IsNil() {
+				if c.strictPaths {
+					return temp, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
+				}
+				objectRef.Set(initNewValue(objectRef.Type().Elem()))
 			}
-		} else {
-			if segment.isIndex {
-				return nil, &Error{NotFound, fmt.Sprintf("cannot set map with an index (%s)", fullKey)}
-			}
-			keys = segment.keys
+		}
+		objectRef = objectRef.Elem()
+	}
+
+	if objectRef.IsValid() && objectRef.IsZero() {
+		if c.strictPaths {
+			return temp, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
+		}
+		if !objectRef.CanSet() {
+			return temp, &Error{NotFound, fmt.Sprintf("object is not addressable (%s)", fullKey)}
+		}
+		objectRef.Set(initNewValue(objectRef.Type()).Elem())
+	}
+
+	switch objectRef.Kind() {
+	case reflect.Map:
+		var keys []reflect.Value
+		if !objectRef.IsValid() {
+			return temp, &Error{NotFound, fmt.Sprintf("map invalid (%s)", fullKey)}
+		}
+		elemType := objectRef.Type().Elem()
+		keys, err = c.mapKeys(objectRef, seg)
+		if err != nil {
+			return temp, err
 		}
 
 		for _, k := range keys {
-			obj[k], err = setNestedValues(obj[k], path[1:], value)
+			nextObject := objectRef.MapIndex(k)
+			if c.strictPaths && !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
+			}
+			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType,
+				func(val reflect.Value) *Error {
+					objectRef.SetMapIndex(k, val)
+					return nil
+				},
+				func() bool {
+					return contains(seg.keysRefl, k)
+				},
+			)
 		}
-		return obj, err
 
-	case []interface{}:
+	case reflect.Struct:
+		var fields []string
+		var segFields []string
+		fields, segFields, err = c.structFields(objectRef, seg)
+		if err != nil {
+			return temp, err
+		}
+		for _, f := range fields {
+			nextObject := objectRef.FieldByName(f)
+			if !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("field does not exist (%s)", seg.raw)}
+			}
+			elemType, _ := objectRef.Type().FieldByName(f)
+			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType.Type,
+				func(val reflect.Value) *Error {
+					if !nextObject.CanSet() {
+						return &Error{NotFound, fmt.Sprintf("struct field is not addressable (%s)", fullKey)}
+					}
+					nextObject.Set(val)
+					return nil
+				},
+				func() bool {
+					return slices.Contains(segFields, f)
+				},
+			)
+		}
 
+	case reflect.Slice, reflect.Array:
 		var idxs []int
-		if segment.isWildcard {
-			idxs = makeRange(0, len(obj)-1)
-		} else {
-			if segment.isKey {
-				return nil, &Error{NotFound, fmt.Sprintf("cannot set array with a key (%s)", fullKey)}
-			}
-			idxs, err = parseIndexes(segment.indexes, len(obj))
-			if err != nil {
-				return nil, err
-			}
-			obj = fillSlice(obj, idxs[len(idxs)-1])
+		var segIdxs []int
+		elemType := objectRef.Type().Elem()
+		idxs, segIdxs, err = c.sliceIndexes(objectRef, seg, c.strictPaths)
+		if err != nil {
+			return temp, err
 		}
-
+		objectRef = fillSlice(objectRef, idxs[len(idxs)-1])
 		for _, i := range idxs {
-			obj[i], err = setNestedValues(obj[i], path[1:], value)
+			nextObject := objectRef.Index(i)
+			if !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("index out of range (%d)", i)}
+			}
+			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType,
+				func(val reflect.Value) *Error {
+					if !nextObject.CanSet() {
+						return &Error{NotFound, fmt.Sprintf("slice index is not addressable (%s)", fullKey)}
+					}
+					nextObject.Set(val)
+					return nil
+				},
+				func() bool {
+					return slices.Contains(segIdxs, i)
+				},
+			)
 		}
-
-		return obj, err
 
 	default:
-		if segment.isWildcard {
-			return nil, &Error{NotFound, fmt.Sprintf("cannot set using a wildcard on a non-existing path (%s)", fullKey)}
+		if seg.isRecursive {
+			return temp, &Error{RecursiveMiss, fmt.Sprintf("path not found (%s)", fullKey)}
 		}
-		if segment.isIndex {
-			new := []interface{}{}
-			parsed, err := parseIndexes(segment.indexes, 0)
+		if c.strictPaths || seg.isWildcard {
+			return temp, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
+		}
+		if seg.isIndex {
+			new := reflect.ValueOf([]interface{}{})
+			parsed, err := parseIndexes(seg.indexes, 0, false)
 			if err != nil {
-				return nil, err
+				return temp, err
 			}
 			new = fillSlice(new, parsed[len(parsed)-1])
 			for _, i := range parsed {
-				new[i], err = setNestedValues(nil, path[1:], value)
+				nextObject := new.Index(i)
+				temp, err = c.setNestedValues(nextObject, nil, path[1:], value, valueSet)
+				if err != nil {
+					return temp, err
+				}
+				if temp.IsValid() {
+					nextObject.Set(temp)
+				}
 			}
 			return new, err
 
 		} else {
-			new := map[string]interface{}{}
-			for _, k := range segment.keys {
-				new[k], err = setNestedValues(nil, path[1:], value)
+			new := reflect.ValueOf(map[string]interface{}{})
+			for _, k := range seg.keysRefl {
+				temp, err = c.setNestedValues(new.MapIndex(k), nil, path[1:], value, valueSet)
+				if err != nil {
+					return temp, err
+				}
+				if temp.IsValid() {
+					new.SetMapIndex(k, temp)
+				}
 			}
 			return new, err
-
 		}
+	}
+
+	if derefenced {
+		return object, err
+	}
+	return objectRef, err
+}
+
+func initNewValue(t reflect.Type) reflect.Value {
+	switch t.Kind() {
+	case reflect.Map:
+		ptr := reflect.New(t)
+		ptr.Elem().Set(reflect.MakeMap(t))
+		return ptr
+	case reflect.Slice, reflect.Array:
+		ptr := reflect.New(t)
+		ptr.Elem().Set(reflect.MakeSlice(t, 0, 0))
+		return ptr
+	default:
+		return reflect.New(t)
 	}
 }
 
-func getNestedValues(object interface{}, path []segment) (interface{}, error) {
+func (c *Compiled) getNestedValues(object reflect.Value, path []segment) ([]interface{}, *Error) {
+	var err *Error
+	var temp []interface{}
+
 	final := len(path) == 0
 	if final {
-		return object, nil
+		if object.IsValid() {
+			return []interface{}{object.Interface()}, nil
+		}
+		return []interface{}{nil}, nil
 	}
-	var err error
-	segment := path[0]
-	fullKey := segment.raw
+	seg := path[0]
+	fullKey := seg.raw
+
+	for object.Kind() == reflect.Ptr || object.Kind() == reflect.Interface {
+		object = object.Elem()
+	}
 
 	result := []interface{}{}
 
-	switch obj := object.(type) {
-	case map[string]interface{}:
-		var keys []string
-		if segment.isWildcard {
-			for k := range obj {
-				keys = append(keys, k)
-			}
-		} else {
-			if segment.isIndex {
-				return nil, &Error{NotFound, fmt.Sprintf("cannot access map with an index (%s)", fullKey)}
-			}
-			keys = segment.keys
-		}
+	if !object.IsValid() {
+		return result, &Error{NotFound, fmt.Sprintf("path not found (%s)", seg.raw)}
+	}
 
+	switch object.Kind() {
+	case reflect.Map:
+		var keys []reflect.Value
+		keys, err = c.mapKeys(object, seg)
+		if err != nil {
+			return temp, err
+		}
 		for _, k := range keys {
-			if _, ok := obj[k]; !ok {
-				return nil, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
+			nextObject := object.MapIndex(k)
+			if !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", seg.raw)}
 			}
-			temp, err := getNestedValues(obj[k], path[1:])
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, temp)
+			result, err = c.getCommon(nextObject, path, seg, result, func() bool {
+				return contains(seg.keysRefl, k)
+			})
 		}
 
-	case []interface{}:
+	case reflect.Struct:
+		var fields []string
+		var segFields []string
+		fields, segFields, err = c.structFields(object, seg)
+		if err != nil {
+			return temp, err
+		}
+		for _, f := range fields {
+			nextObject := object.FieldByName(f)
+			if !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("field does not exist (%s)", seg.raw)}
+			}
+			result, err = c.getCommon(nextObject, path, seg, result, func() bool {
+				return slices.Contains(segFields, f)
+			})
+		}
+
+	case reflect.Slice, reflect.Array:
 		var idxs []int
-		if segment.isWildcard {
-			idxs = makeRange(0, len(obj)-1)
-		} else {
-			if segment.isKey {
-				return nil, &Error{NotFound, fmt.Sprintf("cannot access array with a key (%s)", fullKey)}
-			}
-			idxs, err = parseIndexes(segment.indexes, len(obj))
-			if err != nil {
-				return nil, err
-			}
+		var segIdxs []int
+		idxs, segIdxs, err = c.sliceIndexes(object, seg, true)
+		if err != nil {
+			return temp, err
 		}
-
 		for _, i := range idxs {
-			if i >= len(obj) || i < 0 {
-				return nil, &Error{NotFound, fmt.Sprintf("index out of range (%s)", fullKey)}
+			nextObject := object.Index(i)
+			if !nextObject.IsValid() {
+				return temp, &Error{NotFound, fmt.Sprintf("index out of range (%d)", i)}
 			}
-			temp, err := getNestedValues(obj[i], path[1:])
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, temp)
+			result, err = c.getCommon(nextObject, path, seg, result, func() bool {
+				return slices.Contains(segIdxs, i)
+			})
 		}
 
 	default:
-		if !final {
-			return nil, &Error{NotFound, "path not found"}
+		if seg.isRecursive {
+			return nil, &Error{RecursiveMiss, fmt.Sprintf("path not found (%s)", fullKey)}
 		}
-		return obj, nil
+		return nil, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
 	}
 
-	if len(result) == 1 {
-		return result[0], nil
-	}
-	return result, nil
+	return result, err
 }
 
-func parsePath(path string) ([]segment, error) {
-	segments := []segment{}
-	var err error
+func (c *Compiled) setCommon(
+	nextObject reflect.Value,
+	path []segment,
+	seg segment,
+	value interface{},
+	valueSet *bool,
+	elemType reflect.Type,
+	setValue func(reflect.Value) *Error,
+	inSegment func() bool,
+) *Error {
+	var err *Error
+	var temp reflect.Value
+	nextPath := path[1:]
+	if seg.isRecursive && !inSegment() {
+		nextPath = path
+	}
+	temp, err = c.setNestedValues(nextObject, elemType, nextPath, value, valueSet)
+	if err != nil && err.Code != RecursiveMiss {
+		return err
+	}
+	if temp.IsValid() {
+		if !temp.Type().AssignableTo(elemType) {
+			return &Error{NotFound, fmt.Sprintf("cannot assign type %s to type %s", temp.Type().String(), elemType.String())}
+		}
+		err := setValue(temp)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (c *Compiled) getCommon(
+	nextObject reflect.Value,
+	path []segment,
+	seg segment,
+	result []interface{},
+	inSegment func() bool,
+) ([]interface{}, *Error) {
+	nextPaths := [][]segment{}
+	if seg.isRecursive {
+		nextPaths = append(nextPaths, path)
+	}
+	if !seg.isRecursive || seg.isWildcard || inSegment() {
+		nextPaths = append(nextPaths, path[1:])
+	}
+	var err *Error
+	var temp []interface{}
+	for _, p := range nextPaths {
+		temp, err = c.getNestedValues(nextObject, p)
+		if err != nil && err.Code != RecursiveMiss {
+			return result, err
+		}
+		if err == nil || temp != nil {
+			result = append(result, temp...)
+		}
+	}
+	return result, err
+}
+
+func (c *Compiled) mapKeys(object reflect.Value, seg segment) ([]reflect.Value, *Error) {
+	if seg.isWildcard || seg.isRecursive {
+		return object.MapKeys(), nil
+	} else {
+		if seg.isIndex {
+			return nil, &Error{NotFound, fmt.Sprintf("cannot access map with an index (%s)", seg.raw)}
+		}
+		return seg.keysRefl, nil
+	}
+}
+
+func (c *Compiled) sliceIndexes(object reflect.Value, seg segment, capLength bool) ([]int, []int, *Error) {
+	var err *Error
+	var idxs []int
+	var segIdxs []int
+	if seg.isWildcard || seg.isRecursive {
+		idxs = makeRange(0, object.Len()-1)
+	}
+	if !seg.isWildcard {
+		if !seg.isRecursive && seg.isKey {
+			return nil, nil, &Error{NotFound, fmt.Sprintf("cannot access array with a key (%s)", seg.raw)}
+		}
+		segIdxs, err = parseIndexes(seg.indexes, object.Len(), capLength)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !seg.isRecursive {
+			idxs = segIdxs
+		}
+	}
+	return idxs, segIdxs, nil
+}
+
+func (c *Compiled) structFields(object reflect.Value, seg segment) ([]string, []string, *Error) {
+	var fields []string
+	var segFields []string
+	tagMap := map[string]string{}
+	if seg.isWildcard || seg.isRecursive || c.structTagSet {
+		objType := object.Type()
+		for i := 0; i < object.NumField(); i += 1 {
+			field := objType.Field(i)
+			fields = append(fields, field.Name)
+			if c.structTagSet {
+				if val, ok := field.Tag.Lookup(c.structTag); ok {
+					tagMap[val] = field.Name
+				}
+			}
+		}
+	}
+	if !seg.isWildcard {
+		if seg.isIndex {
+			return nil, nil, &Error{NotFound, fmt.Sprintf("cannot access struct field with an index (%s)", seg.raw)}
+		}
+		segFields = seg.keys
+		if c.structTagSet {
+			for i, k := range segFields {
+				segFields[i] = tagMap[k]
+			}
+		}
+		if !seg.isRecursive {
+			fields = segFields
+		}
+	}
+	return fields, segFields, nil
+}
+
+func Compile(path string, options ...func(*Compiled)) (*Compiled, error) {
+	compiled := Compiled{
+		raw:      path,
+		segments: []segment{},
+	}
+
+	for _, option := range options {
+		option(&compiled)
+	}
+
 	var key string
 	var keyEnd bool
 	var inBracket bool
 	var inQuote bool
 	var quoteChar rune
 
+	if path == "" {
+		return &compiled, &Error{InvalidPath, "empty path"}
+	}
+
 	path = strings.TrimPrefix(path, "$")
-	path = strings.TrimPrefix(path, ".")
+	if path == "." {
+		return &compiled, nil
+	}
+
 	for i, c := range path {
 		if inQuote && c == quoteChar && lastChar(key) != "\\" {
 			inQuote = false
@@ -274,7 +561,7 @@ func parsePath(path string) ([]segment, error) {
 			quoteChar = c
 		}
 
-		if c == '.' && !inQuote {
+		if c == '.' && !inQuote && key != "" && key != "." {
 			if i == len(path)-1 {
 				return nil, &Error{InvalidPath, "path cannot end with '.' separator"}
 			}
@@ -286,7 +573,7 @@ func parsePath(path string) ([]segment, error) {
 				return nil, &Error{InvalidPath, "missing closing bracket"}
 			}
 			inBracket = true
-			if i != 0 {
+			if i != 0 && key != "." && key != ".." {
 				keyEnd = true
 			}
 		}
@@ -303,25 +590,27 @@ func parsePath(path string) ([]segment, error) {
 		}
 
 		if keyEnd {
-			segments, err = addSegment(key, segments)
+			segment, err := parseKey(key)
 			if err != nil {
 				return nil, err
 			}
+			compiled.segments = append(compiled.segments, segment)
+			compiled.hasMulti = compiled.hasMulti || segment.isMulti
+
 			key = ""
 			keyEnd = false
-			if c == '.' {
-				continue
-			}
 		}
 
 		key += string(c)
 	}
 
 	if key != "" {
-		segments, err = addSegment(key, segments)
+		segment, err := parseKey(key)
 		if err != nil {
 			return nil, err
 		}
+		compiled.segments = append(compiled.segments, segment)
+		compiled.hasMulti = compiled.hasMulti || segment.isMulti
 	}
 
 	if inBracket {
@@ -331,50 +620,56 @@ func parsePath(path string) ([]segment, error) {
 		return nil, &Error{InvalidPath, "missing closing quote"}
 	}
 
-	return segments, nil
-}
-
-func addSegment(key string, segments []segment) ([]segment, error) {
-	keys, indexes, indexed, wildcard, err := parseKey(key)
-	if err != nil {
-		return segments, err
-	}
-	segments = append(segments, segment{
-		raw:        key,
-		keys:       keys,
-		indexes:    indexes,
-		isKey:      !indexed,
-		isIndex:    indexed,
-		isWildcard: wildcard,
-	})
-	return segments, nil
+	return &compiled, nil
 }
 
 // Parses path keys
-func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
+func parseKey(fullKey string) (segment, error) {
 	var err error
-	keys := []string{}
-	indexes := []index{}
+	result := segment{
+		raw:      fullKey,
+		keys:     []string{},
+		keysRefl: []reflect.Value{},
+		indexes:  []index{},
+	}
+
+	fullKey = strings.TrimPrefix(fullKey, ".")
 
 	if fullKey == "" {
-		return keys, indexes, false, false, &Error{InvalidPath, "empty path segment"}
+		return result, &Error{InvalidPath, "empty path segment"}
 	}
 
 	// Is a wildcard
 	if fullKey == "*" {
-		return keys, indexes, false, true, nil
+		result.isWildcard = true
+		result.isMulti = true
+		return result, nil
+	}
+
+	// Is recursive
+	if string(fullKey[0]) == "." {
+		result.isRecursive = true
+		result.isMulti = true
+		fullKey = strings.TrimPrefix(fullKey, ".")
+		if fullKey == "" || string(fullKey[0]) == "." {
+			return result, &Error{InvalidPath, "invalid recursive path"}
+		}
 	}
 
 	// Check for square brackets
 	if string(fullKey[0]) != "[" || string(fullKey[len(fullKey)-1]) != "]" {
-		return []string{fullKey}, indexes, false, false, nil
+		result.isKey = true
+		result.addKeys([]string{fullKey})
+		return result, nil
 	}
 
-	key := fullKey[1 : len(fullKey)-1]
+	key := strings.TrimSpace(fullKey[1 : len(fullKey)-1])
 
 	if key == "" {
-		return keys, indexes, false, false, &Error{InvalidPath, "empty path segment"}
+		return result, &Error{InvalidPath, "empty path segment"}
 	}
+
+	keys := []string{}
 
 	// Split the key into it's parts
 	var segment string
@@ -412,7 +707,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 
 	if readSegment {
 		if quoted {
-			return keys, indexes, false, false, &Error{InvalidPath, "missing closing quote"}
+			return result, &Error{InvalidPath, "missing closing quote"}
 		}
 		keys = append(keys, segment)
 	}
@@ -421,9 +716,11 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 		// Check for a wildcard
 		if k == "*" {
 			if len(keys) > 1 {
-				return keys, indexes, false, false, &Error{InvalidPath, "cannot use a wildcard with a multi-select"}
+				return result, &Error{InvalidPath, "cannot use a wildcard with a multi-select"}
 			}
-			return keys, indexes, false, true, nil
+			result.isWildcard = true
+			result.isMulti = true
+			return result, nil
 		}
 
 		// If quoted string (treat as a map key)
@@ -439,7 +736,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 		// Check if the key is an index
 		idx, err := strconv.Atoi(k)
 		if err == nil {
-			indexes = append(indexes, index{idx: idx})
+			result.indexes = append(result.indexes, index{idx: idx})
 			continue
 		}
 
@@ -450,7 +747,7 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 			if rangeKey[1] != "" {
 				start, err := strconv.Atoi(rangeKey[1])
 				if err != nil {
-					return keys, indexes, false, false, &Error{InvalidPath, "invalid range"}
+					return result, &Error{InvalidPath, "invalid range"}
 				}
 				idx.start = start
 				idx.hasStart = true
@@ -458,42 +755,69 @@ func parseKey(fullKey string) ([]string, []index, bool, bool, error) {
 			if rangeKey[2] != "" {
 				end, err := strconv.Atoi(rangeKey[2])
 				if err != nil {
-					return keys, indexes, false, false, &Error{InvalidPath, "invalid range"}
+					return result, &Error{InvalidPath, "invalid range"}
 				}
 				idx.end = end
 				idx.hasEnd = true
 			}
-			indexes = append(indexes, idx)
+			result.indexes = append(result.indexes, idx)
+			result.isMulti = true
+			if idx.hasStart && idx.hasEnd && idx.start == idx.end {
+				return result, &Error{InvalidPath, fmt.Sprintf("invalid index range [%d:%d]", idx.start, idx.end)}
+			}
 		}
 	}
 
-	if len(indexes) == 0 {
-		return keys, indexes, false, false, err
+	result.isMulti = result.isMulti || len(keys) > 1
+
+	if len(result.indexes) == 0 {
+		result.isKey = true
+		result.addKeys(keys)
+		return result, nil
 	}
 
-	if len(indexes) != len(keys) {
-		return keys, indexes, false, false, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
+	result.isIndex = true
+
+	if len(result.indexes) != len(keys) {
+		return result, &Error{InvalidPath, "cannot specify both array indexes and map keys in a multi-select"}
 	}
 
-	return keys, indexes, true, false, err
+	return result, err
 }
 
-func parseIndexes(indexes []index, length int) ([]int, error) {
+func (s *segment) addKeys(keys []string) {
+	s.keys = keys
+	for _, k := range keys {
+		s.keysRefl = append(s.keysRefl, reflect.ValueOf(k))
+	}
+}
+
+func parseIndexes(indexes []index, length int, capLength bool) ([]int, *Error) {
+	var err *Error
 	temp := map[int]struct{}{}
 	parsed := []int{}
 	for _, idx := range indexes {
 		if !idx.hasStart && !idx.hasEnd {
-			idx := wrapIndex(idx.idx, length)
-			temp[idx] = struct{}{}
+			i, err := wrapIndex(idx.idx, length, capLength)
+			if err != nil {
+				return nil, err
+			}
+			temp[i] = struct{}{}
 			continue
 		}
 		var start int
 		var end int
 		if idx.hasStart {
-			start = wrapIndex(idx.start, length)
+			start, err = wrapIndex(idx.start, length, capLength)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if idx.hasEnd {
-			end = wrapIndex(idx.end, length) - 1
+			end, err = wrapIndex(idx.end-1, length, capLength)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			end = length - 1
 		}
@@ -502,7 +826,7 @@ func parseIndexes(indexes []index, length int) ([]int, error) {
 			continue
 		}
 		if start > end {
-			return parsed, &Error{InvalidPath, fmt.Sprintf("indexes out of range [%d:%d]", idx.start, idx.end)}
+			return parsed, &Error{NotFound, fmt.Sprintf("indexes out of range [%d:%d]", idx.start, idx.end)}
 		}
 		for _, i := range makeRange(start, end) {
 			temp[i] = struct{}{}
@@ -517,11 +841,15 @@ func parseIndexes(indexes []index, length int) ([]int, error) {
 	return parsed, nil
 }
 
-func wrapIndex(idx, length int) int {
-	if idx < 0 {
-		idx = length + idx
+func wrapIndex(idx, length int, capLength bool) (int, *Error) {
+	tmp := idx
+	if tmp < 0 {
+		tmp = length + tmp
 	}
-	return idx
+	if tmp < 0 || (capLength && tmp >= length) {
+		return tmp, &Error{NotFound, fmt.Sprintf("index out of range (%d)", idx)}
+	}
+	return tmp, nil
 }
 
 func makeRange(min, max int) []int {
@@ -532,11 +860,18 @@ func makeRange(min, max int) []int {
 	return a
 }
 
-func fillSlice(slice []interface{}, max int) []interface{} {
-	for i := len(slice); i <= max; i++ {
-		slice = append(slice, nil)
+func fillSlice(slice reflect.Value, lastIndex int) reflect.Value {
+	max := lastIndex + 1
+	if max <= slice.Len() {
+		return slice
 	}
-	return slice
+	new := reflect.MakeSlice(slice.Type(), max-slice.Len(), max-slice.Len())
+	new = reflect.AppendSlice(slice, new)
+	if slice.CanSet() {
+		slice.Set(new)
+		return slice
+	}
+	return new
 }
 
 func lastChar(val string) string {
@@ -544,4 +879,13 @@ func lastChar(val string) string {
 		return ""
 	}
 	return string(val[len(val)-1])
+}
+
+func contains(slice []reflect.Value, val reflect.Value) bool {
+	for _, v := range slice {
+		if v.Comparable() && v.Interface() == val.Interface() {
+			return true
+		}
+	}
+	return false
 }
