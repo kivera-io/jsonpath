@@ -60,6 +60,10 @@ const (
 	RecursiveMiss = "recursive_miss"
 )
 
+func (c *Compiled) RawPath() string {
+	return c.raw
+}
+
 func (c *Compiled) EnableStrictPaths() {
 	c.strictPaths = true
 }
