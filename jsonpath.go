@@ -20,10 +20,6 @@ type Compiled struct {
 
 	// only allow setting values on existing paths
 	strictPaths bool
-	// only allow updating existing keys in maps
-	strictMaps bool
-	// only allow updating existing indicies in slices
-	strictSlices bool
 	// query struct based off a tag instead of field names
 	structTag    string
 	structTagSet bool
@@ -64,62 +60,30 @@ const (
 	RecursiveMiss = "recursive_miss"
 )
 
-func (c *Compiled) SetStrict() {
-	c.strictPaths = true
-	c.strictMaps = true
-	c.strictSlices = true
-}
-
-func (c *Compiled) SetStrictPaths() {
+func (c *Compiled) EnableStrictPaths() {
 	c.strictPaths = true
 }
 
-func (c *Compiled) SetStrictMaps() {
-	c.strictMaps = true
-}
-
-func (c *Compiled) SetStrictSlices() {
-	c.strictSlices = true
-}
-
-func (c *Compiled) SetStructTag(tag string) {
+func (c *Compiled) UseStructTag(tag string) {
 	c.structTag = tag
 	c.structTagSet = true
 }
 
-func SetStrict() func(c *Compiled) {
+func EnableStrictPaths() func(c *Compiled) {
 	return func(c *Compiled) {
-		c.SetStrict()
+		c.EnableStrictPaths()
 	}
 }
 
-func SetStrictPaths() func(c *Compiled) {
+func UseStructTag(tag string) func(c *Compiled) {
 	return func(c *Compiled) {
-		c.SetStrictPaths()
-	}
-}
-
-func SetStrictMaps() func(c *Compiled) {
-	return func(c *Compiled) {
-		c.SetStrictMaps()
-	}
-}
-
-func SetStrictSlices() func(c *Compiled) {
-	return func(c *Compiled) {
-		c.SetStrictMaps()
-	}
-}
-
-func SetStructTag(tag string) func(c *Compiled) {
-	return func(c *Compiled) {
-		c.SetStructTag(tag)
+		c.UseStructTag(tag)
 	}
 }
 
 func (c *Compiled) Set(object interface{}, value interface{}) error {
 	var valueSet bool
-	_, err := c.setNestedValues(reflect.ValueOf(object), c.segments, value, &valueSet)
+	_, err := c.setNestedValues(reflect.ValueOf(object), nil, c.segments, value, &valueSet)
 	if err != nil {
 		if err.Code != RecursiveMiss {
 			return err
@@ -163,7 +127,7 @@ func Get(object interface{}, path string, options ...func(*Compiled)) (interface
 	return compiled.Get(object)
 }
 
-func (c *Compiled) setNestedValues(object reflect.Value, path []segment, value interface{}, valueSet *bool) (reflect.Value, *Error) {
+func (c *Compiled) setNestedValues(object reflect.Value, objectType reflect.Type, path []segment, value interface{}, valueSet *bool) (reflect.Value, *Error) {
 	var err *Error
 	var temp reflect.Value
 
@@ -175,49 +139,62 @@ func (c *Compiled) setNestedValues(object reflect.Value, path []segment, value i
 	seg := path[0]
 	fullKey := seg.raw
 
+	if !object.IsValid() && objectType != nil {
+		object = initNewValue(objectType).Elem()
+	}
+
 	var derefenced bool
 	objectRef := object
 	for objectRef.Kind() == reflect.Ptr || objectRef.Kind() == reflect.Interface {
 		if objectRef.Kind() == reflect.Ptr {
 			derefenced = true
+			if objectRef.IsNil() {
+				if c.strictPaths {
+					return temp, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
+				}
+				objectRef.Set(initNewValue(objectRef.Type().Elem()))
+			}
 		}
-		// if objectRef.IsNil() {
-		// 	elemType := objectRef.Type().Elem()
-		// 	switch elemType.Kind() {
-		// 	case reflect.Struct:
-		// 		objectRef.Set(reflect.New(elemType).Elem().Addr())
-		// 	case reflect.Map:
-		// 		objectRef.Set(reflect.MakeMap(elemType).Addr())
-		// 	case reflect.Slice, reflect.Array:
-		// 		objectRef.Set(reflect.MakeSlice(elemType, 0, 0).Addr())
-		// 	}
-		// }
 		objectRef = objectRef.Elem()
+	}
+
+	if objectRef.IsValid() && objectRef.IsZero() {
+		if c.strictPaths {
+			return temp, &Error{NotFound, fmt.Sprintf("path not found (%s)", fullKey)}
+		}
+		if !objectRef.CanSet() {
+			return temp, &Error{NotFound, fmt.Sprintf("object is not addressable (%s)", fullKey)}
+		}
+		objectRef.Set(initNewValue(objectRef.Type()).Elem())
 	}
 
 	switch objectRef.Kind() {
 	case reflect.Map:
 		var keys []reflect.Value
+		if !objectRef.IsValid() {
+			return temp, &Error{NotFound, fmt.Sprintf("map invalid (%s)", fullKey)}
+		}
 		elemType := objectRef.Type().Elem()
 		keys, err = c.mapKeys(objectRef, seg)
 		if err != nil {
 			return temp, err
 		}
+
 		for _, k := range keys {
 			nextObject := objectRef.MapIndex(k)
-			if c.strictMaps && !nextObject.IsValid() {
+			if c.strictPaths && !nextObject.IsValid() {
 				return temp, &Error{NotFound, fmt.Sprintf("key does not exist (%s)", fullKey)}
 			}
 			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType,
-				func(val reflect.Value) {
+				func(val reflect.Value) *Error {
 					objectRef.SetMapIndex(k, val)
+					return nil
 				},
 				func() bool {
 					return contains(seg.keysRefl, k)
 				},
 			)
 		}
-		return object, err
 
 	case reflect.Struct:
 		var fields []string
@@ -233,21 +210,24 @@ func (c *Compiled) setNestedValues(object reflect.Value, path []segment, value i
 			}
 			elemType, _ := objectRef.Type().FieldByName(f)
 			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType.Type,
-				func(val reflect.Value) {
+				func(val reflect.Value) *Error {
+					if !nextObject.CanSet() {
+						return &Error{NotFound, fmt.Sprintf("struct field is not addressable (%s)", fullKey)}
+					}
 					nextObject.Set(val)
+					return nil
 				},
 				func() bool {
 					return slices.Contains(segFields, f)
 				},
 			)
 		}
-		return object, err
 
 	case reflect.Slice, reflect.Array:
 		var idxs []int
 		var segIdxs []int
 		elemType := objectRef.Type().Elem()
-		idxs, segIdxs, err = c.sliceIndexes(objectRef, seg, c.strictSlices)
+		idxs, segIdxs, err = c.sliceIndexes(objectRef, seg, c.strictPaths)
 		if err != nil {
 			return temp, err
 		}
@@ -258,18 +238,18 @@ func (c *Compiled) setNestedValues(object reflect.Value, path []segment, value i
 				return temp, &Error{NotFound, fmt.Sprintf("index out of range (%d)", i)}
 			}
 			err = c.setCommon(nextObject, path, seg, value, valueSet, elemType,
-				func(val reflect.Value) {
+				func(val reflect.Value) *Error {
+					if !nextObject.CanSet() {
+						return &Error{NotFound, fmt.Sprintf("slice index is not addressable (%s)", fullKey)}
+					}
 					nextObject.Set(val)
+					return nil
 				},
 				func() bool {
 					return slices.Contains(segIdxs, i)
 				},
 			)
 		}
-		if !derefenced {
-			return objectRef, err
-		}
-		return object, err
 
 	default:
 		if seg.isRecursive {
@@ -286,25 +266,50 @@ func (c *Compiled) setNestedValues(object reflect.Value, path []segment, value i
 			}
 			new = fillSlice(new, parsed[len(parsed)-1])
 			for _, i := range parsed {
-				temp, err = c.setNestedValues(new.Index(i), path[1:], value, valueSet)
+				nextObject := new.Index(i)
+				temp, err = c.setNestedValues(nextObject, nil, path[1:], value, valueSet)
 				if err != nil {
 					return temp, err
 				}
-				new.Index(i).Set(temp)
+				if temp.IsValid() {
+					nextObject.Set(temp)
+				}
 			}
 			return new, err
 
 		} else {
 			new := reflect.ValueOf(map[string]interface{}{})
 			for _, k := range seg.keysRefl {
-				temp, err = c.setNestedValues(new.MapIndex(k), path[1:], value, valueSet)
+				temp, err = c.setNestedValues(new.MapIndex(k), nil, path[1:], value, valueSet)
 				if err != nil {
 					return temp, err
 				}
-				new.SetMapIndex(k, temp)
+				if temp.IsValid() {
+					new.SetMapIndex(k, temp)
+				}
 			}
 			return new, err
 		}
+	}
+
+	if derefenced {
+		return object, err
+	}
+	return objectRef, err
+}
+
+func initNewValue(t reflect.Type) reflect.Value {
+	switch t.Kind() {
+	case reflect.Map:
+		ptr := reflect.New(t)
+		ptr.Elem().Set(reflect.MakeMap(t))
+		return ptr
+	case reflect.Slice, reflect.Array:
+		ptr := reflect.New(t)
+		ptr.Elem().Set(reflect.MakeSlice(t, 0, 0))
+		return ptr
+	default:
+		return reflect.New(t)
 	}
 }
 
@@ -327,6 +332,10 @@ func (c *Compiled) getNestedValues(object reflect.Value, path []segment) ([]inte
 	}
 
 	result := []interface{}{}
+
+	if !object.IsValid() {
+		return result, &Error{NotFound, fmt.Sprintf("path not found (%s)", seg.raw)}
+	}
 
 	switch object.Kind() {
 	case reflect.Map:
@@ -396,7 +405,7 @@ func (c *Compiled) setCommon(
 	value interface{},
 	valueSet *bool,
 	elemType reflect.Type,
-	setValue func(reflect.Value),
+	setValue func(reflect.Value) *Error,
 	inSegment func() bool,
 ) *Error {
 	var err *Error
@@ -405,15 +414,18 @@ func (c *Compiled) setCommon(
 	if seg.isRecursive && !inSegment() {
 		nextPath = path
 	}
-	temp, err = c.setNestedValues(nextObject, nextPath, value, valueSet)
+	temp, err = c.setNestedValues(nextObject, elemType, nextPath, value, valueSet)
 	if err != nil && err.Code != RecursiveMiss {
 		return err
 	}
-	if err == nil || temp.IsValid() {
+	if temp.IsValid() {
 		if !temp.Type().AssignableTo(elemType) {
 			return &Error{NotFound, fmt.Sprintf("cannot assign type %s to type %s", temp.Type().String(), elemType.String())}
 		}
-		setValue(temp)
+		err := setValue(temp)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }

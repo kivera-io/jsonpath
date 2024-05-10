@@ -123,6 +123,8 @@ var val2 = "val2"
 var val3 = "val3"
 var newVal = "new"
 
+var intVal = 123
+
 func getStructuredData1() *map[string]map[string][]int {
 	return &map[string]map[string][]int{
 		"key1": {
@@ -188,7 +190,7 @@ func getStructuredData4() *StructData {
 			},
 			MissingTag: "val",
 			PointerVal: &val1,
-			PointerStruct: &pointerStruct{
+			PointerStruct: &basicStruct{
 				Key: "val",
 			},
 			PointerMap: &map[string]string{
@@ -203,15 +205,16 @@ func getStructuredData4() *StructData {
 	}
 }
 
-type pointerStruct struct {
+type basicStruct struct {
 	Key string `json:"key"`
 }
 
 type subStruct struct {
 	Slice         []string                    `json:"slice"`
 	Map           map[string]string           `json:"map"`
+	Struct        basicStruct                 `json:"struct"`
 	PointerVal    *string                     `json:"pointer_val"`
-	PointerStruct *pointerStruct              `json:"pointer_struct"`
+	PointerStruct *basicStruct                `json:"pointer_struct"`
 	PointerMap    *map[string]string          `json:"pointer_map"`
 	PointerSlice  *[]string                   `json:"pointer_slice"`
 	Interface     interface{}                 `json:"interface"`
@@ -1555,6 +1558,66 @@ func TestGet(t *testing.T) {
 				wantErrCode: NotFound,
 				wantErrMsg:  "field does not exist",
 			},
+			{
+				name: "reflection-path-not-found-1",
+				args: args{
+					object: StructData{},
+					path:   "$.SubStruct.Slice[1]",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+			},
+			{
+				name: "reflection-path-not-found-2",
+				args: args{
+					object: StructData{SubStruct: subStruct{}},
+					path:   "$.SubStruct.Slice[1]",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+			},
+			{
+				name: "reflection-path-not-found-3",
+				args: args{
+					object: StructData{SubStruct: subStruct{Slice: []string{}}},
+					path:   "$.SubStruct.Slice[1]",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+			},
+			{
+				name: "reflection-path-not-found-4",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.Slice[1]",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+			},
+			{
+				name: "empty-map-get-1",
+				args: args{
+					object: map[string]map[string]map[string]bool{},
+					path:   "$.key1.key2.key3",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "key does not exist",
+			},
+			{
+				name: "empty-slice-set-1",
+				args: args{
+					object: &[][][][][]bool{},
+					path:   "$.[0][0][0][0][0]",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "index out of range",
+			},
 		},
 		"multi-method": {
 			{
@@ -1753,7 +1816,7 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 			{
-				name: "struct-access-1",
+				name: "struct-access-map",
 				args: args{
 					object: getStructuredData4(),
 					path:   "$.SubStruct.Map.key1",
@@ -1762,7 +1825,7 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 			{
-				name: "struct-access-2",
+				name: "struct-access-slice",
 				args: args{
 					object: getStructuredData4(),
 					path:   "$.SubStruct.Slice[0]",
@@ -1771,7 +1834,7 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 			{
-				name: "struct-access-3",
+				name: "struct-access-map-wildcard",
 				args: args{
 					object: getStructuredData4(),
 					path:   "$.SubStruct.Map[*]",
@@ -1781,7 +1844,7 @@ func TestGet(t *testing.T) {
 				sortResult: true,
 			},
 			{
-				name: "struct-access-4",
+				name: "struct-access-whole-slice",
 				args: args{
 					object: getStructuredData4(),
 					path:   "$.SubStruct.Slice",
@@ -1790,13 +1853,69 @@ func TestGet(t *testing.T) {
 				wantErr: false,
 			},
 			{
-				name: "struct-access-5",
+				name: "struct-access-missing-tag",
 				args: args{
 					object: getStructuredData4(),
 					path:   "$.SubStruct.MissingTag",
 				},
 				want:    "val",
 				wantErr: false,
+			},
+			{
+				name: "struct-get-pointer-val",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.PointerVal",
+				},
+				want: &val1,
+			},
+			{
+				name: "struct-get-pointer-struct",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.PointerStruct.Key",
+				},
+				want: "val",
+			},
+			{
+				name: "struct-get-pointer-map",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.PointerMap.key",
+				},
+				want: "val",
+			},
+			{
+				name: "struct-get-pointer-slice",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.PointerSlice[0]",
+				},
+				want: "val",
+			},
+			{
+				name: "struct-get-interface",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.Interface.key",
+				},
+				want: 123,
+			},
+			{
+				name: "struct-get-pointer-chain",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct.PointerChain[0].key",
+				},
+				want: true,
+			},
+			{
+				name: "struct-get-sub-struct",
+				args: args{
+					object: getStructuredData4(),
+					path:   "$.SubStruct",
+				},
+				want: getStructuredData4().SubStruct,
 			},
 			{
 				name: "struct-tag-access-1",
@@ -1854,7 +1973,7 @@ func TestGet(t *testing.T) {
 					return
 				}
 				if tt.args.structTag != "" {
-					c.SetStructTag(tt.args.structTag)
+					c.UseStructTag(tt.args.structTag)
 				}
 				got, err := c.Get(tt.args.object)
 				if (err != nil) != tt.wantErr {
@@ -2780,6 +2899,17 @@ func TestSet(t *testing.T) {
 				wantErrCode: NotFound,
 				wantErrMsg:  "cannot assign type",
 			},
+			{
+				name: "refelction-not-addressable",
+				args: args{
+					object: StructData{},
+					path:   "$.SubStruct.Slice[0]",
+					value:  "test",
+				},
+				wantErr:     true,
+				wantErrCode: NotFound,
+				wantErrMsg:  "object is not addressable",
+			},
 		},
 		"recursive-set": {
 			{
@@ -3532,12 +3662,12 @@ func TestSet(t *testing.T) {
 				args: args{
 					object:    getStructuredData4(),
 					path:      "$.sub_struct.pointer_struct",
-					value:     &pointerStruct{Key: "test"},
+					value:     &basicStruct{Key: "test"},
 					structTag: "json",
 				},
 				want: func() interface{} {
 					expected := getStructuredData4()
-					expected.SubStruct.PointerStruct = &pointerStruct{Key: "test"}
+					expected.SubStruct.PointerStruct = &basicStruct{Key: "test"}
 					return expected
 				}(),
 			},
@@ -3643,19 +3773,32 @@ func TestSet(t *testing.T) {
 					}}
 				}(),
 			},
-			// {
-			// 	name: "empty-struct-map",
-			// 	args: args{
-			// 		object: &StructData{},
-			// 		path:   "$.SubStruct.Map['key']",
-			// 		value:  "val",
-			// 	},
-			// 	want: func() interface{} {
-			// 		return &StructData{SubStruct: subStruct{
-			// 			Map: map[string]string{"key": "val"},
-			// 		}}
-			// 	}(),
-			// },
+			{
+				name: "empty-struct-map",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.Map['key']",
+					value:  "val",
+				},
+				want: func() interface{} {
+					return &StructData{SubStruct: subStruct{
+						Map: map[string]string{"key": "val"},
+					}}
+				}(),
+			},
+			{
+				name: "empty-struct-struct",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.Struct.Key",
+					value:  "val",
+				},
+				want: func() interface{} {
+					return &StructData{SubStruct: subStruct{
+						Struct: basicStruct{Key: "val"},
+					}}
+				}(),
+			},
 			{
 				name: "empty-struct-interface",
 				args: args{
@@ -3682,47 +3825,197 @@ func TestSet(t *testing.T) {
 					}}
 				}(),
 			},
-			// {
-			// 	name: "empty-struct-pointer-map",
-			// 	args: args{
-			// 		object: &StructData{},
-			// 		path:   "$.SubStruct.PointerMap['key']",
-			// 		value:  "val",
-			// 	},
-			// 	want: func() interface{} {
-			// 		return &StructData{SubStruct: subStruct{
-			// 			PointerMap: &map[string]string{"key": "val"},
-			// 		}}
-			// 	}(),
-			// },
-			// {
-			// 	name: "empty-struct-pointer-slice",
-			// 	args: args{
-			// 		object: &StructData{},
-			// 		path:   "$.SubStruct.PointerSlice[3]",
-			// 		value:  "test",
-			// 	},
-			// 	want: func() interface{} {
-			// 		return &StructData{SubStruct: subStruct{
-			// 			PointerSlice: &[]string{"", "", "test"},
-			// 		}}
-			// 	}(),
-			// },
-			// {
-			// 	name: "empty-struct-pointer-struct",
-			// 	args: args{
-			// 		object: &StructData{},
-			// 		path:   "$.SubStruct.PointerStruct.Key",
-			// 		value:  "val",
-			// 	},
-			// 	want: func() interface{} {
-			// 		return &StructData{SubStruct: subStruct{
-			// 			PointerStruct: &pointerStruct{
-			// 				Key: "val",
-			// 			},
-			// 		}}
-			// 	}(),
-			// },
+			{
+				name: "empty-struct-pointer-map",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.PointerMap['key']",
+					value:  "val",
+				},
+				want: func() interface{} {
+					return &StructData{SubStruct: subStruct{
+						PointerMap: &map[string]string{"key": "val"},
+					}}
+				}(),
+			},
+			{
+				name: "empty-struct-pointer-slice",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.PointerSlice[3]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					return &StructData{SubStruct: subStruct{
+						PointerSlice: &[]string{"", "", "", "test"},
+					}}
+				}(),
+			},
+			{
+				name: "empty-struct-pointer-struct",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.PointerStruct.Key",
+					value:  "val",
+				},
+				want: func() interface{} {
+					return &StructData{SubStruct: subStruct{
+						PointerStruct: &basicStruct{
+							Key: "val",
+						},
+					}}
+				}(),
+			},
+			{
+				name: "empty-struct-pointer-chain",
+				args: args{
+					object: &StructData{},
+					path:   "$.SubStruct.PointerChain[0].key",
+					value:  &[]interface{}{1, "test", true},
+				},
+				want: func() interface{} {
+					tmp := []map[string]interface{}{{"key": &[]interface{}{1, "test", true}}}
+					tmp2 := &tmp
+					tmp3 := &tmp2
+					return &StructData{SubStruct: subStruct{
+						PointerChain: &tmp3,
+					}}
+				}(),
+			},
+			{
+				name: "empty-map-set-1",
+				args: args{
+					object: map[string]map[string]map[string]bool{},
+					path:   "$.key1.key2.key3",
+					value:  true,
+				},
+				want: func() interface{} {
+					return map[string]map[string]map[string]bool{
+						"key1": {
+							"key2": {
+								"key3": true,
+							},
+						},
+					}
+				}(),
+			},
+			{
+				name: "empty-slice-set-1",
+				args: args{
+					object: &[][][][][]bool{},
+					path:   "$.[0][0][0][0][0]",
+					value:  true,
+				},
+				want: func() interface{} {
+					return &[][][][][]bool{{{{{true}}}}}
+				}(),
+			},
+			{
+				name: "empty-complex-object-set-1",
+				args: args{
+					object: map[string]*[]*map[string]*int{},
+					path:   "$.key1[2].key2",
+					value:  &intVal,
+				},
+				wantJson: func() string {
+					obj := map[string]*[]*map[string]*int{
+						"key1": {
+							nil,
+							nil,
+							{
+								"key2": &intVal,
+							},
+						},
+					}
+					val, _ := json.Marshal(obj)
+					return string(val)
+				}(),
+			},
+			{
+				name: "empty-complex-object-set-2",
+				args: args{
+					object: map[string]**map[string][]*[]interface{}{},
+					path:   "$.key1.key2[0][0].key3.key4[0]",
+					value:  &intVal,
+				},
+				want: func() interface{} {
+					sub2 := map[string]interface{}{
+						"key3": map[string]interface{}{
+							"key4": []interface{}{
+								&intVal,
+							},
+						},
+					}
+					sub1 := map[string][]*[]interface{}{
+						"key2": {
+							{
+								sub2,
+							},
+						},
+					}
+					sub1pter := &sub1
+					obj := map[string]**map[string][]*[]interface{}{
+						"key1": &sub1pter,
+					}
+					return obj
+				}(),
+			},
+			{
+				name: "empty-complex-object-set-3",
+				args: args{
+					object: map[string]*[]interface{}{},
+					path:   "$.key1[0].key2[0,1,2]",
+					value:  nil,
+				},
+				want: func() interface{} {
+					return map[string]*[]interface{}{
+						"key1": {
+							map[string]interface{}{
+								"key2": []interface{}{
+									nil,
+									nil,
+									nil,
+								},
+							},
+						},
+					}
+				}(),
+			},
+			{
+				name: "empty-complex-object-set-4",
+				args: args{
+					object: map[string][]map[string]*StructData{},
+					path:   "$.key1[0,1,2].key2.SubStruct.Slice[0,2,4]",
+					value:  "test",
+				},
+				want: func() interface{} {
+					return map[string][]map[string]*StructData{
+						"key1": {
+							{
+								"key2": &StructData{
+									SubStruct: subStruct{
+										Slice: []string{"test", "", "test", "", "test"},
+									},
+								},
+							},
+							{
+								"key2": &StructData{
+									SubStruct: subStruct{
+										Slice: []string{"test", "", "test", "", "test"},
+									},
+								},
+							},
+							{
+								"key2": &StructData{
+									SubStruct: subStruct{
+										Slice: []string{"test", "", "test", "", "test"},
+									},
+								},
+							},
+						},
+					}
+				}(),
+			},
 		},
 	}
 
@@ -3739,10 +4032,10 @@ func TestSet(t *testing.T) {
 					return
 				}
 				if tt.args.structTag != "" {
-					c.SetStructTag(tt.args.structTag)
+					c.UseStructTag(tt.args.structTag)
 				}
 				if tt.strictMode {
-					c.SetStrict()
+					c.EnableStrictPaths()
 				}
 				err = c.Set(tt.args.object, tt.args.value)
 				if (err != nil) != tt.wantErr {

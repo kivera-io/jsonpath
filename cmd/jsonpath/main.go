@@ -87,7 +87,7 @@ func main() {
 		quit(err)
 	}
 	if *strict {
-		c.SetStrict()
+		c.EnableStrictPaths()
 	}
 
 	var result interface{}
