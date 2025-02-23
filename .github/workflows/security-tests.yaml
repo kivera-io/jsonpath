@@ -16,15 +16,7 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
-      - uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
       - uses: snyk/actions/setup@master
-      - name: Setup
-        run: |
-          git config --global user.name "$GITUSER"
-          git config --global user.email "${GITUSER}@users.noreply.github.com"
-          git config --global url."git@github.com:".insteadOf "https://github.com/"
       - name: Run Snyk Test
         run: |
           snyk test --fail-on=upgradable
