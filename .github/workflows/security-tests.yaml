@@ -17,6 +17,11 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
       - uses: snyk/actions/setup@master
+      - name: Setup
+        run: |
+          git config --global user.name "$GITUSER"
+          git config --global user.email "${GITUSER}@users.noreply.github.com"
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
       - name: Run Snyk Test
         run: |
           snyk test --fail-on=upgradable
